@@ -27,7 +27,7 @@ from padel_booking import (
     submit_booking, verify_booking_created, record_booking,
     already_booked_successfully, fetch_my_bookings, cancel_booking,
     is_cancellable, _fmt_booking, parse_date, to_api_date,
-    preferred_slot_starts, pick_best_slot,
+    preferred_slot_starts, pick_best_slot, keepalive,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -624,8 +624,7 @@ def _wait_for_otp(api: TelegramAPI, chat_ids: list, deadline: float,
                       "is active; retrying")
                 time.sleep(10)
             else:
-                _log(f"[telegram] poll error while waiting for OTP: {e}",
-                      flush=True)
+                _log(f"[telegram] poll error while waiting for OTP: {e}")
                 time.sleep(5)
             continue
         if updates:

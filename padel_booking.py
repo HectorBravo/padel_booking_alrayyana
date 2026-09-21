@@ -832,14 +832,19 @@ def cancel_booking(s: requests.Session, details_id: str):
     return False, f"HTTP {r.status_code}"
 
 
+def is_cancelled(b: dict) -> bool:
+    """True when the portal marks the booking as cancelled/rejected."""
+    return b.get("status", "").lower() in ("reject", "rejected",
+                                           "cancelled", "canceled")
+
+
 def is_cancellable(b: dict, now: datetime | None = None) -> bool:
     """A booking can be cancelled if it's still active and starts in the future.
 
     Already-rejected/cancelled bookings are not cancellable.
     """
     now = now or datetime.now()
-    if b.get("status", "").lower() in ("reject", "rejected", "cancelled",
-                                      "canceled"):
+    if is_cancelled(b):
         return False
     return b["from_dt"] is not None and b["from_dt"] > now
 
@@ -852,10 +857,7 @@ def _booking_info(b: dict) -> str:
 
 def _booking_label(b: dict) -> str:
     """Simplified status label: 'approved' or 'cancelled'."""
-    if b.get("status", "").lower() in ("reject", "rejected", "cancelled",
-                                      "canceled"):
-        return "cancelled"
-    return "approved"
+    return "cancelled" if is_cancelled(b) else "approved"
 
 
 def _fmt_booking(b: dict) -> str:

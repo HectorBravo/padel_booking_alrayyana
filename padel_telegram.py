@@ -26,7 +26,7 @@ from padel_booking import (
     is_logged_in, fetch_booking_page, parse_booking_meta, get_available_slots,
     submit_booking, verify_booking_created, record_booking,
     already_booked_successfully, fetch_my_bookings, cancel_booking,
-    is_cancellable, _fmt_booking, parse_date, to_api_date,
+    is_cancellable, is_cancelled, _fmt_booking, parse_date, to_api_date,
     preferred_slot_starts, pick_best_slot, keepalive,
 )
 
@@ -426,6 +426,8 @@ class PadelBot:
             self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
                                 f"login.")
             return
+        # Only show live bookings — hide cancelled/rejected ones.
+        bookings = [b for b in bookings if not is_cancelled(b)]
         if not bookings:
             self._send(chat_id, "No upcoming bookings.")
             return

@@ -1,0 +1,13 @@
+{
+  "email": "you@example.com",
+  "password": "your-password",
+  "asset_booking_id": "370",
+  "unit": "09 01",
+  "attendees": 4,
+  "target_weekdays": ["Sunday", "Tuesday"],
+  "preferred_slots": ["20:00", "21:00", "19:00"],
+  "min_start_hour": "18:00",
+  "description": "Padel booking",
+  "keepalive_minutes": 20,
+  "booking_open_hour": 0
+}

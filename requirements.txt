@@ -1,0 +1,8 @@
+# Padel booking automation — Python dependencies
+# Install with:  pip install -r requirements.txt
+#
+# curl_cffi is required (not plain `requests`): the portal sits behind Akamai
+# bot-detection that fingerprints TLS/HTTP2, so a browser-like fingerprint
+# (impersonate="chrome") is needed for the OTP login to establish a session.
+curl_cffi==0.16.3
+beautifulsoup4==4.14.2

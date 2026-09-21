@@ -1,0 +1,1363 @@
+#!/usr/bin/env python3
+"""
+Padel court booking automation for the Asteco community portal
+(https://myportal.asteco.com).
+
+The portal is a server-rendered (CodeIgniter) app. Authentication is:
+  1. POST /login/checkLogin  with obfuscated username/password
+  2. Server emails a 6-digit OTP and redirects to /login/checkOtp
+  3. POST /login/verifyOtp   with the OTP + hidden fields (AJAX)
+  4. Response is a redirect URL; following it establishes the session
+
+Credentials are read from config.json (kept OUTSIDE this script, chmod 600).
+The authenticated session (cookies) is persisted to session.json (chmod 600)
+so the OTP is only needed once per session lifetime.
+
+Usage:
+  python3 padel_booking.py login-start             # submit credentials, trigger OTP email
+  python3 padel_booking.py login-finish <OTP>      # verify OTP, save the session
+  python3 padel_booking.py login-status            # show whether the saved session is valid
+  python3 padel_booking.py explore                 # dump the authenticated booking page HTML
+  python3 padel_booking.py slots 2026-09-26        # list available time slots for a date
+  python3 padel_booking.py slots 2026-09-26 --from 18:00   # ...only from 6pm on
+  python3 padel_booking.py book 2026-09-26 "18:00-19:00" [description] [--verbose]
+  python3 padel_booking.py pick                    # interactive: browse all
+  python3 padel_booking.py pick --from 18:00       #   ...highlight 6pm+ slots green
+                                                   # available slots (today ->
+                                                   # today+6) and choose one
+  python3 padel_booking.py mybookings             # list your portal bookings
+  python3 padel_booking.py mybookings 2026-09-26  #   ...for one date
+  python3 padel_booking.py cancel                 # interactive: pick one to
+                                                   # cancel (future bookings)
+  python3 padel_booking.py cancel 7938824         #   ...or cancel by booking-id
+  python3 padel_booking.py autobook [date] [--dry-run]   # book a preferred slot now
+  python3 padel_booking.py keepalive               # refresh the persisted session
+  python3 padel_booking.py daemon [--dry-run]      # resident bot: book target days at midnight
+
+Auto-booking bot (daemon):
+  The portal opens each day's bookings at midnight (00:00) for the date 6 days
+  ahead. The daemon books your target weekdays (default: Sunday & Tuesday) using
+  your preferred slots in priority order (default: 8-9pm, then 9-10pm, then
+  7-8pm), polling one request every 30s from the moment the window opens until
+  it books (or 5h pass). It only fires on the day the target slot's window
+  opens. It also keeps the
+  session alive periodically. Run it in the background, e.g.:
+      Unix:    nohup python3 padel_booking.py daemon >> daemon.log 2>&1 &
+      Windows: python padel_booking.py daemon   (dedicated terminal, or Task
+               Scheduler / pythonw for a hidden window)
+  Use --dry-run to test the logic without submitting any real booking.
+  All bot settings live in config.json (target_weekdays, preferred_slots,
+  min_start_hour, booking_open_hour, keepalive_minutes, description).
+  'min_start_hour' (default "18:00") is the time cutoff: 'slots' lists only
+  slots from that time on, while 'pick' shows all but highlights matching ones
+  in green. Override per-run with '--from HH:MM' (e.g. '--from 00:00').
+"""
+
+import base64
+import ctypes
+import json
+import os
+import re
+import sys
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from curl_cffi import requests  # browser TLS fingerprint (impersonate) to pass Akamai
+from bs4 import BeautifulSoup
+
+HERE = Path(__file__).resolve().parent
+BASE_URL = "https://myportal.asteco.com"
+CONFIG_FILE = HERE / "config.json"
+SESSION_FILE = HERE / "session.json"
+
+
+# --------------------------------------------------------------------------- #
+# Terminal colors (ANSI escape codes)
+# --------------------------------------------------------------------------- #
+# Colors are emitted only when stdout is an interactive terminal and the user
+# hasn't opted out via NO_COLOR, so piped/log output stays clean.
+_COLORS = {
+    "grey":  "\033[90m",
+    "red":   "\033[31m",
+    "green": "\033[32m",
+    "reset": "\033[0m",
+}
+ANSI_STATE = {"ready": False}
+
+
+def _ansi_enabled() -> bool:
+    if os.environ.get("NO_COLOR"):
+        return False
+    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+
+
+def _enable_windows_ansi() -> None:
+    """Enable VT (ANSI) processing on Windows consoles; no-op elsewhere."""
+    if ANSI_STATE["ready"] or sys.platform != "win32":
+        return
+    try:
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_ulong()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            # ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+            kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    ANSI_STATE["ready"] = True
+
+
+def _paint(text: str, color: str) -> str:
+    """Wrap *text* in an ANSI color; returns it unchanged when colors are off."""
+    if not _ansi_enabled():
+        return text
+    _enable_windows_ansi()
+    return f"{_COLORS[color]}{text}{_COLORS['reset']}"
+
+
+# --------------------------------------------------------------------------- #
+# Config / session persistence
+# --------------------------------------------------------------------------- #
+def load_config() -> dict:
+    """Load and validate config.json, exiting with a clear error if invalid."""
+    if not CONFIG_FILE.exists():
+        sys.exit(f"ERROR: config file not found at {CONFIG_FILE}")
+    with open(CONFIG_FILE, encoding="utf-8") as f:
+        cfg = json.load(f)
+    for key in ("email", "password"):
+        if key not in cfg:
+            sys.exit(f"ERROR: '{key}' missing from {CONFIG_FILE}")
+    return cfg
+
+
+def new_session(restore: bool = True) -> requests.Session:
+    """Create a Chrome-impersonating session, optionally restoring cookies."""
+    # impersonate="chrome" presents a real Chrome TLS/HTTP2 fingerprint so the
+    # portal's Akamai bot-detection grants a genuine authenticated session.
+    s = requests.Session(impersonate="chrome")
+    s.headers.update({
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+    if restore:
+        restore_cookies(s)
+    return s
+
+
+def restore_cookies(s: requests.Session) -> bool:
+    """Load persisted cookies into the session. Returns True if any loaded."""
+    if not SESSION_FILE.exists():
+        return False
+    try:
+        data = json.loads(SESSION_FILE.read_text())
+    except (OSError, ValueError):
+        return False
+    loaded = False
+    for c in data.get("cookies", []):
+        s.cookies.set(
+            c["name"], c["value"],
+            domain=c.get("domain", ".asteco.com"),
+            path=c.get("path", "/"),
+        )
+        loaded = True
+    return loaded
+
+
+def save_session(s: requests.Session) -> None:
+    """Persist the session's cookies to session.json (chmod 600)."""
+    cookies = [
+        {"name": c.name, "value": c.value, "domain": c.domain, "path": c.path}
+        for c in s.cookies.jar
+    ]
+    SESSION_FILE.write_text(json.dumps(
+        {"cookies": cookies, "saved_at": datetime.now().isoformat()}, indent=2))
+    SESSION_FILE.chmod(0o600)
+
+
+# --------------------------------------------------------------------------- #
+# Auth
+# --------------------------------------------------------------------------- #
+def encode(value: str) -> str:
+    """Replicate the portal's JS encode() used for login credentials.
+
+    JS:  btoa(btoa(str)) -> XOR each char code with 10 -> btoa()
+    """
+    s = base64.b64encode(value.encode("utf-8")).decode("ascii")
+    s = base64.b64encode(s.encode("ascii")).decode("ascii")
+    s = "".join(chr(ord(c) ^ 10) for c in s)
+    return base64.b64encode(s.encode("latin-1")).decode("ascii")
+
+
+def is_logged_in(s: requests.Session, cfg: dict) -> bool:
+    """Return True if the current session can reach the booking page."""
+    r = s.get(f"{BASE_URL}/asset/assetbooking/{cfg['asset_booking_id']}",
+              allow_redirects=True)
+    return r.status_code == 200 and "/login" not in r.url.lower()
+
+
+def _hidden_field(soup: BeautifulSoup, name: str) -> str:
+    """Return the value of a hidden input with the given name, or ''."""
+    el = soup.find("input", attrs={"name": name})
+    if el is None:
+        return ""
+    value = el.get("value")
+    return value if isinstance(value, str) else ""
+
+
+PENDING_FILE = HERE / "pending_login.json"
+
+
+def _save_cookies(s: requests.Session) -> list:
+    return [
+        {"name": c.name, "value": c.value, "domain": c.domain, "path": c.path}
+        for c in s.cookies.jar
+    ]
+
+
+def _load_cookies(s: requests.Session, cookies: list) -> None:
+    for c in cookies:
+        s.cookies.set(
+            c["name"], c["value"],
+            domain=c.get("domain", ".asteco.com"),
+            path=c.get("path", "/"),
+        )
+
+
+def login_start(cfg: dict) -> None:
+    """Phase 1: submit credentials, receive the OTP email, stash pending state."""
+    # Clean session: stale cookies from a previous (expired) session must not
+    # be sent, or the server refuses to establish the new one.
+    s = new_session(restore=False)
+
+    # checkLogin -> redirects to /login/checkOtp (OTP emailed)
+    s.get(BASE_URL + "/")
+    r = s.post(BASE_URL + "/login/checkLogin", data={
+        "username": encode(cfg["email"]),
+        "password": encode(cfg["password"]),
+    })
+    if "checkOtp" not in r.url:
+        if is_logged_in(s, cfg):
+            save_session(s)
+            print("  -> Already authenticated. Session saved.")
+            return
+        raise RuntimeError(f"Login did not reach OTP step (url={r.url}, "
+                           f"status={r.status_code})")
+
+    # parse hidden fields from the OTP page
+    soup = BeautifulSoup(r.text, "html.parser")
+    otp_fields = {
+        k: _hidden_field(soup, k)
+        for k in ("id_user", "phone", "email", "first_name", "last_name",
+                  "password", "username", "name_usr")
+    }
+
+    # stash the pending state (cookies + otp fields) so phase 2 can resume
+    state = {
+        "cookies": _save_cookies(s),
+        "otp_fields": otp_fields,
+        "created_at": datetime.now().isoformat(),
+    }
+    PENDING_FILE.write_text(json.dumps(state, indent=2))
+    PENDING_FILE.chmod(0o600)
+
+    print("  -> OTP sent to your email. Check your inbox.")
+    print("  -> When ready, run: python3 padel_booking.py login-finish <OTP>")
+
+
+def login_finish(cfg: dict, otp: str) -> requests.Session:
+    """Phase 2: verify the OTP and establish the authenticated session."""
+    if not PENDING_FILE.exists():
+        raise RuntimeError("No pending login. Run 'login-start' first.")
+    state = json.loads(PENDING_FILE.read_text())
+
+    # Clean session (no stale session.json cookies), then apply the pending
+    # cookies captured during login_start.
+    s = new_session(restore=False)
+    _load_cookies(s, state["cookies"])
+    otp_fields = state["otp_fields"]
+
+    # verifyOtp (AJAX) -> returns redirect URL, or '2' (expired) / '3' (invalid)
+    r2 = s.post(BASE_URL + "/login/verifyOtp",
+                data={"user_otp": otp, **otp_fields})
+    resp = r2.text.strip()
+    if resp == "2":
+        raise RuntimeError("OTP expired. Run 'login-start' to get a fresh OTP.")
+    if resp == "3":
+        raise RuntimeError("OTP invalid. Re-run 'login-start' and retry.")
+
+    # follow the redirect to establish the session
+    target = resp if resp.startswith("http") else BASE_URL + resp
+    s.get(target, allow_redirects=True)
+
+    if not is_logged_in(s, cfg):
+        raise RuntimeError("OTP accepted but session still not authenticated.")
+
+    save_session(s)
+    PENDING_FILE.unlink(missing_ok=True)
+    print("  -> Login successful. Session saved to session.json")
+    return s
+
+
+def get_authenticated_session(cfg: dict) -> requests.Session:
+    """Return a valid authenticated session, prompting to re-login if needed."""
+    s = new_session()
+    if is_logged_in(s, cfg):
+        save_session(s)
+        return s
+    raise RuntimeError(
+        "Session missing/expired. Run 'login-start' then 'login-finish <OTP>' "
+        "to authenticate before using slots/book.")
+
+
+# --------------------------------------------------------------------------- #
+# Commands
+# --------------------------------------------------------------------------- #
+def cmd_login_start(cfg: dict) -> None:
+    """CLI: start the two-step login (sends the OTP email)."""
+    print("Starting login to", BASE_URL)
+    login_start(cfg)
+
+
+def cmd_login_finish(cfg: dict, args: list) -> None:
+    """CLI: finish the two-step login with the OTP from the email."""
+    if not args:
+        sys.exit("ERROR: provide the OTP, e.g. login-finish 123456")
+    login_finish(cfg, args[0].strip())
+
+
+def cmd_login_status(cfg: dict) -> None:
+    """CLI: report whether the saved session is still valid."""
+    s = new_session()
+    ok = is_logged_in(s, cfg)
+    print("Session valid:", ok)
+    if ok:
+        save_session(s)
+        print("Session refreshed/saved.")
+    else:
+        print("Run 'login-start' then 'login-finish <OTP>' to authenticate.")
+
+
+def cmd_explore(cfg: dict) -> None:
+    """CLI: dump the authenticated booking page HTML for inspection."""
+    s = get_authenticated_session(cfg)
+    r = s.get(f"{BASE_URL}/asset/assetbooking/{cfg['asset_booking_id']}")
+    out = HERE / "booking_page.html"
+    out.write_text(r.text)
+    print(f"Booking page dumped to {out} ({len(r.text)} chars)")
+
+
+def to_api_date(d: str) -> str:
+    """Convert a user-supplied date to the portal's 'd-m-yyyy' slot-API format."""
+    dt = parse_date(d)
+    return f"{dt.day}-{dt.month}-{dt.year}"
+
+
+def parse_date(d: str) -> datetime:
+    """Parse a user-supplied date (YYYY-MM-DD or DD/MM/YYYY); raise ValueError."""
+    d = d.strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(d, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"Could not parse date '{d}'. Use YYYY-MM-DD or DD/MM/YYYY.")
+
+
+def to_form_date(d: str) -> str:
+    """Convert a user-supplied date to the form's 'M d, yyyy' format."""
+    dt = parse_date(d)
+    return f"{dt.strftime('%b')} {dt.day}, {dt.year}"
+
+
+def fetch_booking_page(s: requests.Session, cfg: dict) -> str:
+    """Fetch the booking page HTML, raising if the session has expired."""
+    r = s.get(f"{BASE_URL}/asset/assetbooking/{cfg['asset_booking_id']}")
+    if "/login" in r.url.lower():
+        raise RuntimeError("Session expired. Re-login before booking.")
+    return r.text
+
+
+def parse_booking_meta(html: str) -> dict:
+    """Extract the booking form's key values (unit, user, community, name)."""
+    soup = BeautifulSoup(html, "html.parser")
+    meta = {}
+    sel = soup.find("select", id="id_unit")
+    if sel:
+        opts = [o for o in sel.find_all("option") if o.get("value")]
+        if opts:
+            meta["unit_id"] = opts[0].get("value")
+            meta["unit_label"] = opts[0].get_text(strip=True)
+    for key, attr in (("user_id", "user"), ("community_id", "community"),
+                      ("applicant_name", "applicant_name")):
+        el = soup.find("input", id=attr)
+        if el and el.get("value"):
+            meta[key] = el.get("value")
+    el = soup.find("input", attrs={"name": "status"})
+    if el and el.get("value"):
+        meta["status"] = el.get("value")
+    return meta
+
+
+def get_available_slots(s: requests.Session, cfg: dict, api_date: str,
+                        meta: dict | None = None) -> list:
+    """Call the portal's slot endpoint and return the list of free slots."""
+    meta = meta or {}
+    serach_val = {
+        "date": api_date,
+        "id_asset": cfg["asset_booking_id"],
+        "is_paid": "N",
+        "user": meta.get("user_id", cfg.get("user_id", "")),
+        "id_community": meta.get("community_id", cfg.get("community_id", "")),
+        "attendees": str(cfg.get("attendees", 1)),
+        "id_unit": meta.get("unit_id", cfg.get("unit_id", "")),
+        "clsId": "",
+    }
+    # jQuery serializes the nested object as serach_val[key]=value
+    data = {f"serach_val[{k}]": v for k, v in serach_val.items()}
+    r = s.post(BASE_URL + "/ajaxctrl/getAmenityBookingSlot", data=data)
+    soup = BeautifulSoup(r.text, "html.parser")
+    slots = []
+    for inp in soup.find_all("input", attrs={"name": "check_in_time"}):
+        label = inp.find_next("label")
+        raw_val = inp.get("value")
+        val = raw_val if isinstance(raw_val, str) else ""
+        parts = val.split("_")
+        start = parts[0] if parts else None
+        end = parts[1] if len(parts) > 1 else None
+        # Prefer a clean 24-hour label (e.g. "14:00-15:00") built from the
+        # slot value; fall back to the portal's own label text if unavailable.
+        label_text = f"{start}-{end}" if (start and end) else (
+            label.get_text(strip=True) if label else val)
+        slots.append({
+            "value": val,
+            "label": label_text,
+            "start": start,
+            "end": end,
+            "slot_id": parts[-1] if parts else None,
+        })
+    return slots
+
+
+def parse_from_filter(args: list):
+    """Extract an optional '--from HH:MM' from args.
+
+    Returns (min_start_or_None, remaining_args).
+    """
+    min_start = None
+    rest = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--from" and i + 1 < len(args):
+            min_start = args[i + 1]
+            i += 2
+        else:
+            rest.append(args[i])
+            i += 1
+    return min_start, rest
+
+
+def _start_minutes(start) -> int:
+    """Convert 'HH:MM' to minutes since midnight, or -1 if invalid/missing."""
+    try:
+        h, m = str(start).split(":")
+        return int(h) * 60 + int(m)
+    except (AttributeError, ValueError):
+        return -1
+
+
+def filter_slots_from(slots: list, min_start) -> list:
+    """Keep only slots whose start time is >= min_start ('HH:MM').
+
+    If min_start is empty/invalid, return the slots unchanged.
+    """
+    if not min_start:
+        return slots
+    cutoff = _start_minutes(min_start)
+    if cutoff < 0:
+        return slots
+    return [sl for sl in slots
+            if (mins := _start_minutes(sl.get("start"))) >= 0 and mins >= cutoff]
+
+
+def _slot_matches(slot: dict, min_start) -> bool:
+    """True if the slot starts at/after min_start ('HH:MM'); False if no filter."""
+    if not min_start:
+        return False
+    cutoff = _start_minutes(min_start)
+    if cutoff < 0:
+        return False
+    return _start_minutes(slot.get("start")) >= cutoff
+
+
+def resolve_min_start(cfg: dict, args: list):
+    """Return (min_start, remaining_args).
+
+    A CLI '--from HH:MM' overrides the config 'min_start_hour' default.
+    min_start is None when no filter applies.
+    """
+    min_start, rest = parse_from_filter(args)
+    if min_start is None:
+        min_start = cfg.get("min_start_hour") or None
+    return min_start, rest
+
+
+def pop_flag(args: list, flag: str):
+    """Remove `flag` from args (if present). Returns (present, remaining)."""
+    present = flag in args
+    rest = [a for a in args if a != flag]
+    return present, rest
+
+
+def cmd_slots(cfg: dict, args: list) -> None:
+    """CLI: list the available slots for one date (optionally from a time on)."""
+    min_start, args = resolve_min_start(cfg, args)
+    if not args:
+        sys.exit("Usage: slots <date> [--from HH:MM]   (e.g. slots 2026-09-26 --from 18:00)")
+    api_date = to_api_date(args[0])
+    s = get_authenticated_session(cfg)
+    html = fetch_booking_page(s, cfg)
+    meta = parse_booking_meta(html)
+    all_slots = get_available_slots(s, cfg, api_date, meta)
+    slots = filter_slots_from(all_slots, min_start)
+    print(f"\nAvailable slots for {args[0]}  (unit {meta.get('unit_label')}, "
+          f"{cfg.get('attendees', 1)} attendees)")
+    if min_start:
+        print(f"  (filtered: from {min_start} onwards)")
+    print("-" * 46)
+    if not slots:
+        if all_slots:
+            reason = (f"no slots from {min_start} onwards "
+                      f"(earliest is {all_slots[0]['label']})")
+        else:
+            reason = "fully booked"
+        print(f"  No slots available ({reason}).")
+    for sl in slots:
+        print(f"  {sl['label']:<22}  [{sl['value']}]")
+    print("-" * 46)
+    shown = len(slots)
+    total = len(all_slots)
+    if min_start and shown != total:
+        print(f"  {shown} of {total} slot(s) available (filtered from {min_start}).")
+    else:
+        print(f"  {shown} slot(s) available.")
+
+
+def cmd_book(cfg: dict, args: list) -> None:
+    """CLI: book a specific slot for a date (asks for confirmation first)."""
+    verbose, args = pop_flag(args, "--verbose")
+    if len(args) < 2:
+        sys.exit("Usage: book <date> <slot-label-or-value> [description] [--verbose]")
+    api_date = to_api_date(args[0])
+    want = args[1]
+    description = args[2] if len(args) > 2 else cfg.get("description",
+                                                        "Padel booking")
+
+    s = get_authenticated_session(cfg)
+    html = fetch_booking_page(s, cfg)
+    meta = parse_booking_meta(html)
+    slots = get_available_slots(s, cfg, api_date, meta)
+    if not slots:
+        sys.exit("No slots available for that date.")
+
+    target = None
+    for sl in slots:
+        if want in (sl["label"], sl["value"], sl["slot_id"]):
+            target = sl
+            break
+    if not target:
+        print("Available slots:")
+        for sl in slots:
+            print(f"  {sl['label']}  [{sl['value']}]")
+        sys.exit(f"Slot '{want}' not found among the available slots.")
+
+    print(f"Booking {api_date}  {target['label']}  (unit {meta.get('unit_label')})")
+    confirm = input("Confirm booking? [y/N] ")
+    if confirm.strip().lower() not in ("y", "yes"):
+        print("Aborted.")
+        return
+
+    r = submit_booking(s, cfg, meta, args[0], target, description,
+                       verbose=verbose)
+    ok = verify_booking_created(s, args[0], target["start"])
+    record_booking(args[0], target["label"], ok)
+    print("Response status:", r.status_code, "final url:", r.url)
+    print(f"[diag] verify_booking_created: {ok}")
+    if ok:
+        print("Booking CONFIRMED - it now appears in your 'My Bookings'.")
+    else:
+        err = _booking_error(r)
+        if err:
+            print(f"Booking FAILED: {err}")
+        else:
+            print("Booking FAILED: the portal did not create the booking "
+                  "(no error message, and it is not in 'My Bookings').")
+        print("(No booking was made. Check the slot is still free and retry.)")
+        print("NOTE: the portal allows only ONE booking per day. If you already "
+              "have a booking on this date, it silently blocks every other "
+              "slot - cancel it first (see 'mybookings' / 'cancel') to book a "
+              "different time.")
+
+
+def submit_booking(s: requests.Session, cfg: dict, meta: dict, date_str: str,
+                   slot: dict, description: str, verbose: bool = False
+                   ) -> requests.Response:
+    """POST the booking form. Returns the raw response.
+
+    The portal silently ignores a booking POST that does not include the
+    submit-button field ('submit=submit') - a real browser form always sends
+    it, and its absence is exactly what causes the HTTP-200-but-no-booking
+    silent failure. It must therefore be part of the payload.
+
+    With verbose=True it logs the submitted payload, the HTTP status / final
+    URL, any alert-danger / alert-success text, and saves the full response
+    body to diag_book_response.html for offline inspection.
+    """
+    payload = {
+        "status": meta.get("status", "66"),
+        "is_paid_var": "N",
+        "id_community_asset": cfg["asset_booking_id"],
+        "id_community": meta.get("community_id", ""),
+        "id_unit": meta.get("unit_id", ""),
+        "applicant_name": meta.get("applicant_name", ""),
+        "attendees": str(cfg.get("attendees", 1)),
+        "check_in_date": to_form_date(date_str),
+        "check_in_time": slot["value"],
+        "description": description,
+        "tnc_assest": "on",
+        # The form's submit button (<button name="submit" value="submit">).
+        # Without this the portal accepts the POST (HTTP 200) but creates no
+        # booking and shows no error - so it must always be sent.
+        "submit": "submit",
+    }
+    if verbose:
+        print(f"[diag] POST {BASE_URL}/asset/assetbooking/{cfg['asset_booking_id']}")
+        for k, v in payload.items():
+            print(f"[diag]   {k} = {v!r}")
+    r = s.post(f"{BASE_URL}/asset/assetbooking/{cfg['asset_booking_id']}",
+               data=payload, allow_redirects=True)
+    if verbose:
+        print(f"[diag] HTTP {r.status_code}   final url: {r.url}")
+        print(f"[diag] alert-danger : {_alert_text(r, 'danger') or '(none)'}")
+        print(f"[diag] alert-success: {_alert_text(r, 'success') or '(none)'}")
+        out = HERE / "diag_book_response.html"
+        out.write_text(r.text)
+        out.chmod(0o600)
+        print(f"[diag] response body saved -> {out} ({len(r.text)} chars)")
+    return r
+
+
+def _booking_error(r: requests.Response) -> str:
+    """Return the text of a Bootstrap 'alert-danger' box in the response, or ''.
+
+    A failed booking submission re-renders the page with such a box, e.g.
+    'Booking slot has already been scheduled.'
+    """
+    m = re.search(r'<div class="[^"]*alert-danger[^"]*">(.*?)</div>',
+                  r.text, re.S)
+    if m:
+        return BeautifulSoup(m.group(1), "html.parser").get_text(" ", strip=True)
+    return ""
+
+
+def booking_looks_successful(r: requests.Response) -> bool:
+    """Best-effort check of the booking POST response (NOT reliable on its own).
+
+    NOTE: the booking page always contains a static 'Thank you ... under
+    review' message, so its presence is NOT a valid success signal. A real
+    failure is usually signalled by a Bootstrap 'alert-danger' box (see
+    `_booking_error`).
+
+    IMPORTANT: the portal can also FAIL SILENTLY - it re-renders the page
+    with HTTP 200 and NO alert at all, yet creates no booking (this is what
+    happens with some early-morning slots). So this function is NOT a
+    reliable success signal on its own. Use `verify_booking_created()` to
+    confirm the booking actually landed in 'My Bookings' before reporting
+    success.
+    """
+    if r.status_code not in (200, 302, 303):
+        return False
+    return not _booking_error(r)
+
+
+# --------------------------------------------------------------------------- #
+# Booking memory (prevents double-booking after a daemon restart)
+# --------------------------------------------------------------------------- #
+BOOKED_FILE = HERE / "booked.json"
+
+
+def load_booked() -> list:
+    """Load the booking-memory list from booked.json ([] if missing/invalid)."""
+    if BOOKED_FILE.exists():
+        try:
+            data = json.loads(BOOKED_FILE.read_text())
+            return data if isinstance(data, list) else []
+        except (OSError, ValueError):
+            return []
+    return []
+
+
+def record_booking(date_str: str, slot_label: str, success: bool) -> None:
+    """Append a booking attempt (with outcome) to booked.json."""
+    recs = load_booked()
+    recs.append({
+        "date": date_str,
+        "slot": slot_label,
+        "success": bool(success),
+        "at": datetime.now().isoformat(),
+    })
+    BOOKED_FILE.write_text(json.dumps(recs, indent=2))
+    BOOKED_FILE.chmod(0o600)
+
+
+def already_booked_successfully(date_str: str) -> bool:
+    """True if a booking for this date already succeeded (see booked.json)."""
+    return any(r.get("date") == date_str and r.get("success")
+               for r in load_booked())
+
+
+# --------------------------------------------------------------------------- #
+# My bookings / cancellation
+# --------------------------------------------------------------------------- #
+MYBOOKINGS_URL = f"{BASE_URL}/booking/myBooking"
+CANCEL_URL = f"{BASE_URL}/booking/cancelAmenityBooking"
+
+
+def _parse_booking_dt(x: str):
+    """Parse the portal's 'September 26, 2026  18:00' datetime, or None."""
+    try:
+        return datetime.strptime(re.sub(r"\s+", " ", x), "%B %d, %Y %H:%M")
+    except ValueError:
+        return None
+
+
+def fetch_my_bookings(s: requests.Session) -> list:
+    """Fetch the 'My Bookings' page and return a list of booking dicts.
+
+    Each dict has: booking_id, details_id, name, community, unit, from_str,
+    to_str, from_dt, to_dt, status.  'details_id' is the id used by the
+    portal's cancel endpoint (found in the row's 'View' link).
+    """
+    r = s.get(MYBOOKINGS_URL, allow_redirects=True)
+    if "/login" in r.url.lower():
+        raise RuntimeError("Session expired. Re-login before listing bookings.")
+    soup = BeautifulSoup(r.text, "html.parser")
+    tbl = soup.find("table")
+    bookings = []
+    if not tbl:
+        return bookings
+    for tr in tbl.find_all("tr")[1:]:
+        cells = [re.sub(r"\s+", " ", c.get_text(" ", strip=True))
+                 for c in tr.find_all("td")]
+        if len(cells) < 8:
+            continue
+        m = re.search(r"bookingDetails/(\d+)", str(tr))
+        if not m:
+            continue
+        bookings.append({
+            "booking_id": cells[0],
+            "details_id": m.group(1),
+            "name": cells[2],
+            "community": cells[3],
+            "unit": cells[4],
+            "from_str": cells[5],
+            "to_str": cells[6],
+            "from_dt": _parse_booking_dt(cells[5]),
+            "to_dt": _parse_booking_dt(cells[6]),
+            "status": cells[7].split(" ")[0],
+        })
+    return bookings
+
+
+def verify_booking_created(s: requests.Session, date_str: str,
+                           slot_start: str) -> bool:
+    """Confirm a booking was ACTUALLY created by checking 'My Bookings'.
+
+    This is the ground-truth success check. The portal's booking POST can
+    succeed OR fail silently (HTTP 200, page re-rendered, no alert) without
+    creating a booking, so the response body alone cannot be trusted. The
+    only reliable signal is whether the booking appears in 'My Bookings'.
+
+    Returns True when a booking matching (date, start time) is present.
+    """
+    try:
+        target_date = parse_date(date_str).date()
+    except ValueError:
+        return False
+    try:
+        bookings = fetch_my_bookings(s)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
+    for b in bookings:
+        if b.get("from_dt") is None:
+            continue
+        if (b["from_dt"].date() == target_date
+                and b["from_dt"].strftime("%H:%M") == slot_start):
+            return True
+    return False
+
+
+def _alert_text(r: requests.Response, kind: str) -> str:
+    """Return the text of a Bootstrap 'alert-<kind>' box, or '' if absent."""
+    m = re.search(rf'<div class="[^"]*alert-{kind}[^"]*">(.*?)</div>',
+                  r.text, re.S)
+    if m:
+        return BeautifulSoup(m.group(1), "html.parser").get_text(" ", strip=True)
+    return ""
+
+
+def cancel_booking(s: requests.Session, details_id: str):
+    """Cancel a booking by its details id. Returns (ok, message).
+
+    The portal's cancel is a plain POST to /booking/cancelAmenityBooking with
+    'id_asset_booking' + 'booking_cancel_value=1' (the on-page confirm() is
+    client-side only).  Success is signalled by an 'alert-success' box, a
+    failure by an 'alert-danger' box.
+    """
+    r = s.post(CANCEL_URL, data={
+        "id_asset_booking": details_id,
+        "booking_cancel_value": "1",
+        "submit": "submit",
+    }, allow_redirects=True)
+    err = _alert_text(r, "danger")
+    if err:
+        return False, err
+    ok_msg = _alert_text(r, "success")
+    if ok_msg:
+        return True, ok_msg
+    if r.status_code in (200, 302, 303):
+        return True, "Booking cancelled (no explicit confirmation message)."
+    return False, f"HTTP {r.status_code}"
+
+
+def is_cancellable(b: dict, now: datetime | None = None) -> bool:
+    """A booking can be cancelled if it's still active and starts in the future.
+
+    Already-rejected/cancelled bookings are not cancellable.
+    """
+    now = now or datetime.now()
+    if b.get("status", "").lower() in ("reject", "rejected", "cancelled",
+                                      "canceled"):
+        return False
+    return b["from_dt"] is not None and b["from_dt"] > now
+
+
+def _booking_info(b: dict) -> str:
+    """Date/time/name portion of a booking line (no status, no unit)."""
+    return (f"{b['from_dt']:%a %d %b %Y} {b['from_dt']:%H:%M}-{b['to_dt']:%H:%M}"
+            f"   {b['name']}")
+
+
+def _booking_label(b: dict) -> str:
+    """Simplified status label: 'approved' or 'cancelled'."""
+    if b.get("status", "").lower() in ("reject", "rejected", "cancelled",
+                                      "canceled"):
+        return "cancelled"
+    return "approved"
+
+
+def _fmt_booking(b: dict) -> str:
+    return f"{_booking_info(b)}   [{_booking_label(b)}]"
+
+
+def _booking_state(b: dict, now: datetime) -> str:
+    """Classify a booking for color: 'past' (grey), 'cancelled' (red), or
+    'active' (green). Past (start time already passed) takes priority."""
+    if b["from_dt"] is not None and b["from_dt"] < now:
+        return "past"
+    if _booking_label(b) == "cancelled":
+        return "cancelled"
+    return "active"
+
+
+def cmd_mybookings(cfg: dict, args: list) -> None:
+    """List the user's bookings from the portal's 'My Bookings' page.
+
+    Optionally filter to a single date, e.g. 'mybookings 2026-09-26'.
+    Bookings are listed oldest to newest; each shows its status
+    (approved/cancelled) and is colored: grey if in the past, red if
+    cancelled, green if approved.
+    """
+    s = get_authenticated_session(cfg)
+    bookings = fetch_my_bookings(s)
+    if not bookings:
+        print("No bookings found.")
+        return
+
+    date_filter = None
+    positional = [a for a in args if not a.startswith("--")]
+    if positional:
+        try:
+            date_filter = parse_date(positional[0]).date()
+        except ValueError:
+            sys.exit(f"Could not parse date '{positional[0]}'. "
+                     f"Use YYYY-MM-DD or DD/MM/YYYY.")
+
+    now = datetime.now()
+    if date_filter:
+        shown = [b for b in bookings
+                 if b["from_dt"] and b["from_dt"].date() == date_filter]
+        if not shown:
+            print(f"No bookings on {date_filter:%Y-%m-%d}.")
+            return
+        print(f"Your bookings on {date_filter:%a %d %b %Y} ({len(shown)}):")
+    else:
+        shown = bookings
+        print(f"Your bookings ({len(shown)}):")
+    shown = sorted(shown, key=lambda b: b["from_dt"] or datetime.min)
+    print("-" * 78)
+    for i, b in enumerate(shown, 1):
+        idx = f"  [{i:>2}] "
+        info = _booking_info(b)
+        label = _booking_label(b)
+        state = _booking_state(b, now)
+        if state == "past":
+            print(_paint(idx + info + f"   [{label}]", "grey"))
+        elif state == "cancelled":
+            print(idx + info + _paint(f"   [{label}]", "red"))
+        else:
+            print(idx + info + _paint(f"   [{label}]", "green"))
+    print()
+    print("To cancel one:")
+    print("  python3 padel_booking.py cancel                 # interactive")
+    print("  python3 padel_booking.py cancel <booking-id>    # direct")
+
+
+def cmd_cancel(cfg: dict, args: list) -> None:
+    """Cancel one of the user's bookings.
+
+    With no argument, lists the cancellable (future) bookings and lets you
+    pick a number, then confirms.  With an argument, target a specific
+    booking by booking-id, details-id, or date (YYYY-MM-DD / DD/MM/YYYY).
+    """
+    s = get_authenticated_session(cfg)
+    bookings = fetch_my_bookings(s)
+    if not bookings:
+        print("No bookings found.")
+        return
+    now = datetime.now()
+
+    target = None
+    positional = [a for a in args if not a.startswith("--")]
+    if positional:
+        key = positional[0]
+        for b in bookings:
+            if key in (b["booking_id"], b["details_id"]):
+                target = b
+                break
+        if target is None:
+            try:
+                d = parse_date(key).date()
+            except ValueError:
+                sys.exit(f"Booking '{key}' not found. Use a booking-id, "
+                         f"details-id, or a date.")
+            matches = [b for b in bookings
+                       if b["from_dt"] and b["from_dt"].date() == d]
+            if len(matches) == 1:
+                target = matches[0]
+            elif len(matches) > 1:
+                print(f"Multiple bookings on {d:%Y-%m-%d}; specify a booking-id:")
+                for i, b in enumerate(matches, 1):
+                    print(f"  [{i}] {b['from_dt']:%H:%M}-{b['to_dt']:%H:%M}"
+                          f"  id={b['booking_id']}")
+                sys.exit(1)
+            else:
+                sys.exit(f"No booking on {d:%Y-%m-%d}.")
+        if target is None:
+            sys.exit(f"Booking '{key}' not found.")
+    else:
+        cancellable = [b for b in bookings if is_cancellable(b, now)]
+        if not cancellable:
+            print("No cancellable (future) bookings found. Current bookings:")
+            for b in bookings:
+                print(f"  {_fmt_booking(b)}")
+            return
+        print("Cancellable bookings:")
+        for i, b in enumerate(cancellable, 1):
+            print(f"  [{i:>2}] {_fmt_booking(b)}   id={b['booking_id']}")
+        raw = input("\nEnter booking number to cancel ('q' to quit): ").strip()
+        if not raw or raw.lower() in ("q", "quit", "cancel"):
+            print("Aborted. Nothing cancelled.")
+            return
+        if not raw.isdigit() or not 1 <= int(raw) <= len(cancellable):
+            print("Invalid selection. Nothing cancelled.")
+            return
+        target = cancellable[int(raw) - 1]
+
+    print("\nYou are about to CANCEL:")
+    print(f"  {_fmt_booking(target)}")
+    if not is_cancellable(target, now):
+        print("  WARNING: this slot's start time is in the past; the portal")
+        print("           may refuse to cancel it.")
+    confirm = input("Confirm cancellation? This cannot be undone. [y/N] ")
+    if confirm.strip().lower() not in ("y", "yes"):
+        print("Aborted. Nothing cancelled.")
+        return
+
+    ok, msg = cancel_booking(s, target["details_id"])
+    if ok:
+        print(f"Cancelled: {msg}")
+    else:
+        print(f"FAILED to cancel: {msg}")
+        sys.exit(1)
+
+
+# --------------------------------------------------------------------------- #
+# Interactive manual booking (browse the whole bookable window, then choose)
+# --------------------------------------------------------------------------- #
+def cmd_pick(cfg: dict, args: list) -> None:
+    """List every available slot from today through the last bookable day
+    (today + 6), let the user pick one or more (max one per day), then book.
+
+    A '--from HH:MM' filter (or the config 'min_start_hour') highlights the
+    matching slots (starting at/after that time) in green; the rest are shown
+    in normal color. Nothing is hidden.
+    """
+    verbose, args = pop_flag(args, "--verbose")
+    min_start, args = resolve_min_start(cfg, args)
+    s = get_authenticated_session(cfg)
+    html = fetch_booking_page(s, cfg)
+    meta = parse_booking_meta(html)
+
+    today = datetime.now().date()
+    last = today + timedelta(days=6)
+    print(f"Bookable window: {today:%a %d %b %Y} .. {last:%a %d %b %Y}"
+          f"   (unit {meta.get('unit_label')})")
+    if min_start:
+        print(f"  (green: slots from {min_start} onwards)")
+    print("-" * 62)
+
+    all_slots = []
+    for i in range(7):
+        d = today + timedelta(days=i)
+        api_date = f"{d.day}-{d.month}-{d.year}"
+        for sl in get_available_slots(s, cfg, api_date, meta):
+            all_slots.append({"date": d, "slot": sl})
+
+    if not all_slots:
+        print("No slots available in the bookable window.")
+        sys.exit(1)
+
+    print(f"Available slots ({len(all_slots)}):")
+    for i, item in enumerate(all_slots, 1):
+        line = f"  [{i:>2}] {item['date']:%a %d %b %Y}   {item['slot']['label']}"
+        if _slot_matches(item["slot"], min_start):
+            print(_paint(line, "green"))
+        else:
+            print(line)
+    print()
+
+    raw = input("Enter slot number(s) to book (e.g. '3' or '1,5'; 'q' to quit): ")
+    raw = raw.strip()
+    if not raw or raw.lower() in ("q", "quit", "cancel"):
+        print("Aborted. Nothing booked.")
+        return
+
+    nums = [int(x) for x in re.split(r"[,\s]+", raw) if x.strip().isdigit()]
+    if not nums:
+        print("No valid slot number entered. Nothing booked.")
+        return
+
+    selections, seen_days = [], set()
+    for num in nums:
+        if num < 1 or num > len(all_slots):
+            print(f"  ! [{num}] out of range (1-{len(all_slots)}); skipped.")
+            continue
+        item = all_slots[num - 1]
+        if item["date"] in seen_days:
+            print(f"  ! [{num}] {item['date']:%a %d %b} skipped - one slot per day.")
+            continue
+        seen_days.add(item["date"])
+        selections.append(item)
+
+    if not selections:
+        print("Nothing valid to book.")
+        return
+
+    print("\nYou are about to book:")
+    for item in selections:
+        print(f"  {item['date']:%a %d %b %Y}   {item['slot']['label']}")
+    confirm = input("Confirm booking? [y/N] ")
+    if confirm.strip().lower() not in ("y", "yes"):
+        print("Aborted. Nothing booked.")
+        return
+
+    description = cfg.get("description", "Padel booking")
+    for item in selections:
+        date_str = item["date"].strftime("%Y-%m-%d")
+        r = submit_booking(s, cfg, meta, date_str, item["slot"], description,
+                           verbose=verbose)
+        ok = verify_booking_created(s, date_str, item["slot"]["start"])
+        record_booking(date_str, item["slot"]["label"], ok)
+        if ok:
+            status = "OK (confirmed in My Bookings)"
+        else:
+            err = _booking_error(r) or ("not created - portal gave no error, "
+                                        "check My Bookings")
+            status = f"FAILED ({err})"
+        print(f"  {item['date']:%a %d %b} {item['slot']['label']}: {status}"
+              f"  (HTTP {r.status_code})")
+    print("Done.")
+
+
+# --------------------------------------------------------------------------- #
+# Auto-booking bot
+# --------------------------------------------------------------------------- #
+WEEKDAY_NUM = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+               "friday": 4, "saturday": 5, "sunday": 6}
+
+
+def target_weekday_set(cfg: dict) -> set:
+    """The configured target weekdays as a set of 0-6 (Mon-Sun) numbers."""
+    names = cfg.get("target_weekdays", ["Sunday", "Tuesday"])
+    return {WEEKDAY_NUM[n.strip().lower()] for n in names}
+
+
+def preferred_slot_starts(cfg: dict) -> list:
+    """Preferred slot start times (HH:MM) in priority order."""
+    # start times (HH:MM) in priority order, e.g. 8-9pm -> "20:00"
+    return cfg.get("preferred_slots", ["20:00", "21:00", "19:00"])
+
+
+def pick_best_slot(slots: list, preferred: list):
+    """Return the first available slot matching the preference order."""
+    for pref in preferred:
+        for sl in slots:
+            if sl["start"] == pref:
+                return sl
+    return None
+
+
+def keepalive(cfg: dict) -> requests.Session:
+    """Validate + refresh the persisted session (extends server-side lifetime)."""
+    s = get_authenticated_session(cfg)
+    save_session(s)
+    return s
+
+
+def run_booking_race(cfg: dict, target: datetime, preferred: list,
+                     wait_for_open: bool = True, timeout: int = 18000,
+                     dry_run: bool = False):
+    """Poll the slot endpoint (one request every 30s) and book the best
+    preferred slot as soon as it appears. Keeps trying until it succeeds or
+    `timeout` seconds elapse (default 5h). Returns (slot, all_slots,
+    response_or_None). With dry_run=True it identifies the slot but does NOT
+    submit the booking."""
+    open_hour = int(cfg.get("booking_open_hour", 0))
+    now = datetime.now()
+    open_dt = now.replace(hour=open_hour, minute=0, second=0, microsecond=0)
+
+    # Pre-warm the session + booking page (lowers the booking latency).
+    s = keepalive(cfg)
+    html = fetch_booking_page(s, cfg)
+    meta = parse_booking_meta(html)
+
+    # If this is the day the target opens and we are before the open time,
+    # wait until a couple of seconds before it, then start polling.
+    if (wait_for_open
+            and target.date() == (now + timedelta(days=6)).date()
+            and now < open_dt):
+        while datetime.now() < open_dt - timedelta(seconds=3):
+            time.sleep(0.3)
+
+    api_date = f"{target.day}-{target.month}-{target.year}"
+    deadline = datetime.now() + timedelta(seconds=timeout)
+    last_slots = []
+    attempt = 0
+    while datetime.now() < deadline:
+        attempt += 1
+        slots = get_available_slots(s, cfg, api_date, meta)
+        last_slots = slots
+        best = pick_best_slot(slots, preferred)
+        if best:
+            if dry_run:
+                return best, slots, None
+            description = cfg.get("description", "Padel booking")
+            r = submit_booking(s, cfg, meta, target.strftime("%Y-%m-%d"),
+                               best, description)
+            return best, slots, r
+        if attempt % 10 == 0:
+            print(f"[bot] still waiting for a preferred slot "
+                  f"({attempt} tries, "
+                  f"{int((deadline - datetime.now()).total_seconds())}s left)",
+                  flush=True)
+        time.sleep(30)
+    return None, last_slots, None
+
+
+def cmd_autobook(cfg: dict, args: list) -> None:
+    """One-shot: book a target date now (or wait for midnight if it opens
+    today)."""
+    dry_run = "--dry-run" in args
+    date_str = next((a for a in args if not a.startswith("--")), None)
+    target = parse_date(date_str) if date_str \
+        else datetime.now() + timedelta(days=6)
+
+    preferred = preferred_slot_starts(cfg)
+    target_str = target.strftime("%Y-%m-%d")
+    tag = " [DRY RUN - no booking will be made]" if dry_run else ""
+    print(f"Auto-booking {target:%a %d %b %Y}{tag}")
+    print(f"  prefs: {', '.join(preferred)}")
+    if not dry_run and already_booked_successfully(target_str):
+        print(f"Already booked {target:%a %d %b} successfully (see "
+              f"booked.json). Not booking again.")
+        return
+    best, slots, r = run_booking_race(cfg, target, preferred, dry_run=dry_run)
+    if best is None:
+        print("FAILED: none of the preferred slots were available.")
+        print(f"  Slots seen for that date ({len(slots)}):")
+        for sl in slots:
+            print(f"    {sl['label']}  [{sl['value']}]")
+        sys.exit(1)
+    print(f"Selected slot: {best['label']}  [{best['value']}]")
+    if dry_run:
+        print("DRY RUN: no booking was submitted.")
+        return
+    s = get_authenticated_session(cfg)
+    ok = verify_booking_created(s, target_str, best["start"])
+    record_booking(target_str, best["label"], ok)
+    if r is not None:
+        print("Response status:", r.status_code, "final url:", r.url)
+    if ok:
+        print("Booking CONFIRMED - it now appears in your 'My Bookings'.")
+    else:
+        err = _booking_error(r) if r is not None else ""
+        print(f"Booking FAILED: {err or 'the portal did not create the booking '
+              '(no error message, and it is not in My Bookings)'}")
+
+
+def cmd_keepalive(cfg: dict, _args: list) -> None:
+    """CLI: refresh and re-save the persisted session."""
+    keepalive(cfg)
+    print("Keep-alive OK. Session refreshed and saved.")
+
+
+def cmd_daemon(cfg: dict, args: list) -> None:
+    """Resident bot: keep-alive + book target days at midnight."""
+    dry_run = "--dry-run" in args
+    targets = target_weekday_set(cfg)
+    preferred = preferred_slot_starts(cfg)
+    keepalive_secs = int(cfg.get("keepalive_minutes", 20)) * 60
+    open_hour = int(cfg.get("booking_open_hour", 0))
+
+    def log(msg):
+        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
+
+    names = sorted(n for n, v in WEEKDAY_NUM.items() if v in targets)
+    log(f"Daemon started. Target weekdays: {names}; preferred slots: "
+        f"{preferred}; open at {open_hour:02d}:00; keep-alive every "
+        f"{keepalive_secs // 60} min." + (" [DRY RUN]" if dry_run else ""))
+    log("NOTE: if the session expires the bot CANNOT re-login by itself "
+        "(OTP needs a human). Re-run login-start/login-finish if you see a "
+        "session-expired warning.")
+
+    last_keepalive = time.time()
+    last_book_day = None
+    while True:
+        now = datetime.now()
+
+        # --- keep-alive ---------------------------------------------------
+        if time.time() - last_keepalive >= keepalive_secs:
+            try:
+                keepalive(cfg)
+                log("Keep-alive OK (session refreshed).")
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                log(f"WARNING: keep-alive failed: {e}. "
+                    f"Session may be expired - re-login needed!")
+            last_keepalive = time.time()
+
+        # --- booking window (opens at open_hour, race runs up to 5h) -------
+        # The window for (today + 6) opens at open_hour today. Fire the race
+        # once, at/after open_hour, and only while we are still inside the
+        # 5h race window (so a daemon started mid-day does not fire late).
+        open_dt = now.replace(hour=open_hour, minute=0, second=0,
+                              microsecond=0)
+        race_deadline = open_dt + timedelta(hours=5)
+        if (open_dt <= now < race_deadline
+                and last_book_day != now.date()):
+            last_book_day = now.date()
+            target = (now + timedelta(days=6)).date()
+            target_str = target.strftime("%Y-%m-%d")
+            if target.weekday() not in targets:
+                log(f"Window opened but {target:%a %d %b} is not a target "
+                    f"day; skipping.")
+            elif already_booked_successfully(target_str):
+                log(f"Already booked {target:%a %d %b} successfully; "
+                    f"skipping (see booked.json).")
+            else:
+                log(f"*** Target day! Booking {target:%a %d %b %Y} "
+                    f"{'[DRY RUN]' if dry_run else ''}... "
+                    f"(one request / 30s, up to 5h)")
+                try:
+                    best, slots, r = run_booking_race(
+                        cfg, datetime.combine(target, datetime.min.time()),
+                        preferred, wait_for_open=False, timeout=18000,
+                        dry_run=dry_run)
+                    if best:
+                        if dry_run:
+                            log(f"*** DRY RUN: would book {best['label']} "
+                                f"[{best['value']}] (no booking made).")
+                        else:
+                            s = get_authenticated_session(cfg)
+                            ok = (r is not None
+                                  and verify_booking_created(
+                                      s, target_str, best["start"]))
+                            record_booking(target_str, best["label"], ok)
+                            if ok:
+                                log(f"*** BOOKED {best['label']} "
+                                    f"[{best['value']}] "
+                                    f"(confirmed in My Bookings)")
+                            else:
+                                err = (_booking_error(r) if r else "no response")
+                                if not err:
+                                    err = ("no response" if r is None else
+                                           "not created; check My Bookings")
+                                log(f"*** FAILED to book {best['label']} "
+                                    f"[{best['value']}]: {err}")
+                    else:
+                        log("*** FAILED: no preferred slot available "
+                            f"({len(slots)} slots seen).")
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    log(f"*** ERROR during booking: {e}")
+
+        time.sleep(0.5)
+
+
+def main() -> None:
+    """Parse the command line and dispatch to the matching command."""
+    commands = ("login-start", "login-finish", "login-status", "explore", "slots",
+                "book", "pick", "mybookings", "cancel", "autobook",
+                "keepalive", "daemon")
+    if len(sys.argv) < 2 or sys.argv[1] not in commands:
+        print(__doc__)
+        sys.exit(1)
+    cfg = load_config()
+    cmd = sys.argv[1]
+    args = sys.argv[2:]
+    if cmd == "login-start":
+        cmd_login_start(cfg)
+    elif cmd == "login-finish":
+        cmd_login_finish(cfg, args)
+    elif cmd == "login-status":
+        cmd_login_status(cfg)
+    elif cmd == "explore":
+        cmd_explore(cfg)
+    elif cmd == "slots":
+        cmd_slots(cfg, args)
+    elif cmd == "book":
+        cmd_book(cfg, args)
+    elif cmd == "pick":
+        cmd_pick(cfg, args)
+    elif cmd == "mybookings":
+        cmd_mybookings(cfg, args)
+    elif cmd == "cancel":
+        cmd_cancel(cfg, args)
+    elif cmd == "autobook":
+        cmd_autobook(cfg, args)
+    elif cmd == "keepalive":
+        cmd_keepalive(cfg, args)
+    elif cmd == "daemon":
+        cmd_daemon(cfg, args)
+
+
+if __name__ == "__main__":
+    main()

@@ -356,6 +356,8 @@ def to_api_date(d: str) -> str:
 def parse_date(d: str) -> datetime:
     """Parse a user-supplied date (YYYY-MM-DD or DD/MM/YYYY); raise ValueError."""
     d = d.strip()
+    # Tolerate ISO datetimes too (e.g. "2026-09-22T00:00:00"): keep the date part.
+    d = d.split("T", 1)[0].strip()
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
         try:
             return datetime.strptime(d, fmt)

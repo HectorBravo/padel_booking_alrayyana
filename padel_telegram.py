@@ -408,7 +408,8 @@ class PadelBot:
             self._show_date_keyboard(chat_id, "Pick another date:")
             return
         self.pending[chat_id] = {"action": "pick_slot",
-                                 "date": date.isoformat(), "slots": slots}
+                                 "date": date.strftime("%Y-%m-%d"),
+                                 "slots": slots}
         buttons = [[{"text": sl["label"], "callback_data": f"slot:{i}"}]
                    for i, sl in enumerate(slots)]
         self._send(chat_id, f"Free slots on {date:%a %d %b} — tap one to "

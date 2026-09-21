@@ -34,6 +34,23 @@ HERE = Path(__file__).resolve().parent
 BOT_API = "https://api.telegram.org"
 STATE_FILE = HERE / "telegram_state.json"
 
+# Windows consoles default to cp1252 and our Telegram texts contain emojis:
+# make console printing replace unencodable characters instead of crashing
+# (e.g. a daemon thread dying on a legacy console).
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is None:
+        continue
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+
+def _log(msg: str) -> None:
+    """Print a local log line; safe under pythonw (no console)."""
+    if sys.stdout is not None:
+        print(msg, flush=True)
+
 
 # --------------------------------------------------------------------------- #
 # Errors
@@ -155,14 +172,14 @@ class TelegramNotifier:
         """
         if not self.enabled:
             return False
-        print(f"[telegram] {text}", flush=True)
+        _log(f"[telegram] {text}")
         sent = False
         for chat in self.chat_ids:
             try:
                 self.api.send_message(chat, text)
                 sent = True
             except TelegramError as e:
-                print(f"[telegram] notify to {chat} failed: {e}", flush=True)
+                _log(f"[telegram] notify to {chat} failed: {e}")
         return sent
 
 
@@ -208,8 +225,8 @@ class PadelBot:
             me = self.api.get_me()
         except TelegramError as e:
             sys.exit(f"ERROR: {e}")
-        print(f"[telegram] bot @{me['username']} ready; "
-              f"allowed chats: {self.chat_ids}", flush=True)
+        _log(f"[telegram] bot @{me['username']} ready; "
+              f"allowed chats: {self.chat_ids}")
         commands = [
             {"command": "start", "description": "Show the command list"},
             {"command": "help", "description": "Show the command list"},
@@ -225,7 +242,7 @@ class PadelBot:
         try:
             self.api.set_my_commands(commands)
         except TelegramError as e:
-            print(f"[telegram] warning: command menu not set: {e}", flush=True)
+            _log(f"[telegram] warning: command menu not set: {e}")
         while True:
             try:
                 updates = self.api.get_updates(
@@ -235,8 +252,7 @@ class PadelBot:
                     sys.exit("ERROR: 409 Conflict — another instance of this "
                              "bot is already polling (e.g. the daemon or "
                              "another terminal). Stop it, then retry.")
-                print(f"[telegram] polling error: {e} — retrying in 5s",
-                      flush=True)
+                _log(f"[telegram] polling error: {e} — retrying in 5s")
                 time.sleep(5)
                 continue
             for u in updates:
@@ -258,7 +274,7 @@ class PadelBot:
                 try:
                     self.api.send_message(chat_id, "⛔ This bot is private.")
                 except TelegramError as e:
-                    print(f"[telegram] reply failed: {e}", flush=True)
+                    _log(f"[telegram] reply failed: {e}")
             return
         if "message" in u:
             self._on_message(u["message"])
@@ -271,7 +287,7 @@ class PadelBot:
         try:
             self.api.send_message(chat_id, text, reply_markup)
         except TelegramError as e:
-            print(f"[telegram] send to {chat_id} failed: {e}", flush=True)
+            _log(f"[telegram] send to {chat_id} failed: {e}")
 
     # ---- text commands ----------------------------------------------------- #
     def _on_message(self, m: dict) -> None:
@@ -495,7 +511,7 @@ class PadelBot:
         try:
             self.api.answer_callback_query(cq["id"], "…")
         except TelegramError as e:
-            print(f"[telegram] answerCallbackQuery failed: {e}", flush=True)
+            _log(f"[telegram] answerCallbackQuery failed: {e}")
         if chat_id not in self.chat_ids:
             return
         if data.startswith("date:"):
@@ -584,3 +600,102 @@ class PadelBot:
                                 f"{date_str}.\nThe portal did not create it "
                                 f"(check the daemon/terminal log for the "
                                 f"portal's error).")
+
+
+# --------------------------------------------------------------------------- #
+# Daemon integration: notifications + automatic OTP re-login
+# --------------------------------------------------------------------------- #
+def _wait_for_otp(api: TelegramAPI, chat_ids: list, deadline: float,
+                  reprompt_every: int = 300) -> str | None:
+    """Poll updates until a whitelisted user replies with a numeric code.
+
+    Returns the digits, or None when *deadline* (a ``time.time()`` value)
+    passes. Tracks its own update offset so a restart mid-wait never
+    re-reads an old code.
+    """
+    offset: int | None = None
+    last_prompt = time.time()
+    while time.time() < deadline:
+        try:
+            updates = api.get_updates(offset=offset, timeout=25)
+        except TelegramError as e:
+            if e.code == 409:
+                _log("[telegram] 409 while waiting for OTP: another poller "
+                      "is active; retrying")
+                time.sleep(10)
+            else:
+                _log(f"[telegram] poll error while waiting for OTP: {e}",
+                      flush=True)
+                time.sleep(5)
+            continue
+        if updates:
+            offset = updates[-1]["update_id"] + 1
+        for u in updates:
+            m = u.get("message") or {}
+            if m.get("chat", {}).get("id") not in chat_ids:
+                continue
+            digits = re.sub(r"\D", "", m.get("text") or "")
+            if 4 <= len(digits) <= 8:
+                return digits
+        if time.time() - last_prompt >= reprompt_every:
+            last_prompt = time.time()
+            for chat in chat_ids:
+                try:
+                    api.send_message(chat, "⏳ Still waiting for the OTP "
+                                           "code from your email…")
+                except TelegramError:
+                    pass
+    return None
+
+
+def relogin_via_telegram(cfg: dict, max_attempts: int = 3,
+                         wait_seconds: int = 900) -> bool:
+    """Automatic re-login for the daemon, driven through Telegram.
+
+    Triggers a fresh OTP email, asks the whitelisted user(s) for the code in
+    chat, completes the login and verifies the session with a keep-alive.
+    Returns True only when the session is valid afterwards. Never raises.
+    """
+    token, chat_ids = get_telegram_cfg(cfg)
+    if not token or not chat_ids:
+        return False
+    api = TelegramAPI(token)
+    for attempt in range(1, max_attempts + 1):
+        try:
+            login_start(cfg)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            _log(f"[telegram] could not trigger the OTP email: {e}")
+            return False
+        for chat in chat_ids:
+            try:
+                api.send_message(chat, "⚠️ Session expired — I triggered a "
+                                       "fresh login.\n📧 Check your email "
+                                       "and reply here with the 6-digit OTP "
+                                       "code.")
+            except TelegramError as e:
+                _log(f"[telegram] ask to {chat} failed: {e}")
+        otp = _wait_for_otp(api, chat_ids, time.time() + wait_seconds)
+        if not otp:
+            _log("[telegram] no OTP received in time; will retry on the "
+                  "next keep-alive failure")
+            return False
+        try:
+            login_finish(cfg, otp)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            _log(f"[telegram] OTP attempt {attempt}/{max_attempts} failed: "
+                  f"{e}")
+            continue
+        try:
+            keepalive(cfg)   # verify the session is really valid
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            _log(f"[telegram] login finished but session still invalid: "
+                  f"{e}")
+            continue
+        for chat in chat_ids:
+            try:
+                api.send_message(chat, "✅ Session restored — the daemon is "
+                                       "healthy again.")
+            except TelegramError:
+                pass
+        return True
+    return False

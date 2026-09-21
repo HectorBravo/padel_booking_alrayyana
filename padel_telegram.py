@@ -13,9 +13,22 @@ Config keys (config.json, gitignored):
 """
 
 import json
+import re
+import sys
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from curl_cffi import requests  # already a project dependency (no new packages)
+
+from padel_booking import (
+    login_start, login_finish, get_authenticated_session, new_session,
+    is_logged_in, fetch_booking_page, parse_booking_meta, get_available_slots,
+    submit_booking, verify_booking_created, record_booking,
+    already_booked_successfully, fetch_my_bookings, cancel_booking,
+    is_cancellable, _fmt_booking, parse_date, to_api_date,
+    preferred_slot_starts, pick_best_slot,
+)
 
 HERE = Path(__file__).resolve().parent
 BOT_API = "https://api.telegram.org"
@@ -171,3 +184,403 @@ def save_state(state: dict) -> None:
     """Write telegram_state.json (indent=2, UTF-8, chmod 600)."""
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
     STATE_FILE.chmod(0o600)
+
+
+# --------------------------------------------------------------------------- #
+# Interactive bot
+# --------------------------------------------------------------------------- #
+class PadelBot:
+    """Interactive Telegram bot: login/OTP, slots, book, my-bookings, cancel."""
+
+    def __init__(self, cfg: dict) -> None:
+        self.cfg = cfg
+        self.token, self.chat_ids = get_telegram_cfg(cfg)
+        if not self.token or not self.chat_ids:
+            sys.exit("ERROR: set 'telegram_bot_token' and 'telegram_chat_ids' "
+                     "in config.json first (see TELEGRAM.md).")
+        self.api = TelegramAPI(self.token)
+        self.state = load_state()
+        self.pending: dict = {}   # chat_id -> in-progress flow state
+
+    def run(self) -> None:
+        """Validate the token, publish the command menu, then long-poll."""
+        try:
+            me = self.api.get_me()
+        except TelegramError as e:
+            sys.exit(f"ERROR: {e}")
+        print(f"[telegram] bot @{me['username']} ready; "
+              f"allowed chats: {self.chat_ids}", flush=True)
+        commands = [
+            {"command": "start", "description": "Show the command list"},
+            {"command": "help", "description": "Show the command list"},
+            {"command": "login", "description": "Start a fresh OTP login"},
+            {"command": "status", "description": "Check the saved session"},
+            {"command": "slots", "description": "List free slots (optional: date)"},
+            {"command": "book", "description": "Pick a date + slot to book"},
+            {"command": "mybookings", "description": "List your bookings"},
+            {"command": "cancel", "description": "Cancel one of your bookings"},
+            {"command": "autobook",
+             "description": "Book a preferred slot (optional: date)"},
+        ]
+        try:
+            self.api.set_my_commands(commands)
+        except TelegramError as e:
+            print(f"[telegram] warning: command menu not set: {e}", flush=True)
+        while True:
+            try:
+                updates = self.api.get_updates(
+                    offset=self.state.get("offset"), timeout=50)
+            except TelegramError as e:
+                if e.code == 409:
+                    sys.exit("ERROR: 409 Conflict — another instance of this "
+                             "bot is already polling (e.g. the daemon or "
+                             "another terminal). Stop it, then retry.")
+                print(f"[telegram] polling error: {e} — retrying in 5s",
+                      flush=True)
+                time.sleep(5)
+                continue
+            for u in updates:
+                self._handle(u)
+            if updates:
+                self.state["offset"] = updates[-1]["update_id"] + 1
+                save_state(self.state)
+
+    def _handle(self, u: dict) -> None:
+        """Route one update to its handler; reject non-whitelisted chats."""
+        if "message" in u:
+            chat_id = u["message"].get("chat", {}).get("id")
+        elif "callback_query" in u:
+            chat_id = u["callback_query"].get("from", {}).get("id")
+        else:
+            return
+        if chat_id not in self.chat_ids:
+            if "message" in u:
+                try:
+                    self.api.send_message(chat_id, "⛔ This bot is private.")
+                except TelegramError as e:
+                    print(f"[telegram] reply failed: {e}", flush=True)
+            return
+        if "message" in u:
+            self._on_message(u["message"])
+        elif "callback_query" in u:
+            self._on_callback(u["callback_query"])
+
+    def _send(self, chat_id: int, text: str,
+              reply_markup: dict | None = None) -> None:
+        """Send a message to *chat_id*; log failures instead of raising."""
+        try:
+            self.api.send_message(chat_id, text, reply_markup)
+        except TelegramError as e:
+            print(f"[telegram] send to {chat_id} failed: {e}", flush=True)
+
+    # ---- text commands ----------------------------------------------------- #
+    def _on_message(self, m: dict) -> None:
+        """Handle a text message: a pending OTP first, then /commands."""
+        chat_id = m["chat"]["id"]
+        text = (m.get("text") or "").strip()
+
+        # Pending OTP flow: the next message should be the code from email.
+        if self.pending.get(chat_id, {}).get("action") == "otp":
+            digits = re.sub(r"\D", "", text)
+            if 4 <= len(digits) <= 8:
+                self.pending.pop(chat_id, None)
+                try:
+                    login_finish(self.cfg, digits)
+                    self._send(chat_id, "✅ Login successful — session saved.")
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    self._send(chat_id, f"❌ Login failed: {e}\n\n"
+                                        f"Send /login to try again.")
+            else:
+                self._send(chat_id, "That doesn't look like the OTP code. "
+                                    "Reply with the 6-digit code from your "
+                                    "email (or /login to restart).")
+            return
+
+        if not text.startswith("/"):
+            return
+
+        parts = text.split()
+        cmd = parts[0].split("@")[0].lower()   # strip any @botname, lowercase
+        args = parts[1:]
+        if cmd in ("/start", "/help"):
+            self._on_help(chat_id)
+        elif cmd == "/login":
+            self._on_login(chat_id)
+        elif cmd == "/status":
+            self._on_status(chat_id)
+        elif cmd == "/slots":
+            self._on_slots(chat_id, args)
+        elif cmd == "/book":
+            self._on_book(chat_id)
+        elif cmd == "/mybookings":
+            self._on_mybookings(chat_id)
+        elif cmd == "/cancel":
+            self._on_cancel(chat_id)
+        elif cmd == "/autobook":
+            self._on_autobook(chat_id, args)
+        else:
+            self._send(chat_id, f"Unknown command {cmd}\n\n/help for the list.")
+
+    def _on_login(self, chat_id: int) -> None:
+        """Start the two-step login, then wait for the OTP code here."""
+        try:
+            login_start(self.cfg)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self._send(chat_id, f"❌ Could not start login: {e}")
+            return
+        self.pending[chat_id] = {"action": "otp"}
+        self._send(chat_id, "📧 OTP sent to your email.\n"
+                            "Reply here with the 6-digit code to finish "
+                            "the login.")
+
+    def _on_status(self, chat_id: int) -> None:
+        s = new_session()
+        ok = is_logged_in(s, self.cfg)
+        if ok:
+            self._send(chat_id, "✅ Logged in — session is valid.")
+        else:
+            self._send(chat_id, "❌ Not logged in (or session expired).\n"
+                                "Send /login to start a fresh login.")
+
+    def _on_help(self, chat_id: int) -> None:
+        self._send(chat_id,
+                   "Padel booking bot — commands:\n\n"
+                   "/login — start a fresh OTP login\n"
+                   "/status — check whether the saved session is valid\n"
+                   "/slots [date] — list free slots (or pick a date)\n"
+                   "/book — pick a date, then a slot, to book\n"
+                   "/mybookings — list your portal bookings\n"
+                   "/cancel — cancel one of your bookings\n"
+                   "/autobook [date] — book a preferred slot (default: +6d)\n"
+                   "/start, /help — show this help")
+
+    def _on_slots(self, chat_id: int, args: list) -> None:
+        if args:
+            try:
+                date = parse_date(args[0])
+            except ValueError as e:
+                self._send(chat_id, f"❌ {e}")
+                return
+            self._show_slots(chat_id, date)
+        else:
+            self._show_date_keyboard(chat_id, "Pick a date:")
+
+    def _show_date_keyboard(self, chat_id: int, intro: str) -> None:
+        """Inline keyboard with one button per day, today through today+6."""
+        today = datetime.now().date()
+        buttons = []
+        for i in range(7):
+            d = today + timedelta(days=i)
+            buttons.append([{"text": f"{d:%a %d %b}",
+                             "callback_data": f"date:{d.isoformat()}"}])
+        self._send(chat_id, intro, {"inline_keyboard": buttons})
+
+    def _show_slots(self, chat_id: int, date: datetime) -> None:
+        try:
+            s = get_authenticated_session(self.cfg)
+            html = fetch_booking_page(s, self.cfg)
+            meta = parse_booking_meta(html)
+            slots = get_available_slots(s, self.cfg,
+                                        to_api_date(date.strftime("%Y-%m-%d")),
+                                        meta)
+        except RuntimeError as e:
+            self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
+                                f"login.")
+            return
+        if not slots:
+            self._send(chat_id, f"No free slots on {date:%a %d %b}.")
+            self._show_date_keyboard(chat_id, "Pick another date:")
+            return
+        self.pending[chat_id] = {"action": "pick_slot",
+                                 "date": date.isoformat(), "slots": slots}
+        buttons = [[{"text": sl["label"], "callback_data": f"slot:{i}"}]
+                   for i, sl in enumerate(slots)]
+        self._send(chat_id, f"Free slots on {date:%a %d %b} — tap one to "
+                            f"book:", {"inline_keyboard": buttons})
+
+    def _on_book(self, chat_id: int) -> None:
+        self._show_date_keyboard(chat_id, "Pick a date to book:")
+
+    def _on_mybookings(self, chat_id: int) -> None:
+        try:
+            s = get_authenticated_session(self.cfg)
+            bookings = fetch_my_bookings(s)
+        except RuntimeError as e:
+            self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
+                                f"login.")
+            return
+        if not bookings:
+            self._send(chat_id, "No upcoming bookings.")
+            return
+        text = ("Your bookings:\n\n"
+                + "\n".join(f"{i + 1}. {_fmt_booking(b)}"
+                            for i, b in enumerate(bookings)))
+        rows = [[{"text": f"❌ Cancel #{i + 1}",
+                  "callback_data": f"cx:{b['details_id']}"}]
+                for i, b in enumerate(bookings) if is_cancellable(b)]
+        self._send(chat_id, text, {"inline_keyboard": rows} if rows else None)
+
+    def _on_cancel(self, chat_id: int) -> None:
+        try:
+            s = get_authenticated_session(self.cfg)
+            bookings = fetch_my_bookings(s)
+        except RuntimeError as e:
+            self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
+                                f"login.")
+            return
+        cancellable = [(i, b) for i, b in enumerate(bookings)
+                       if is_cancellable(b)]
+        if not cancellable:
+            self._send(chat_id, "Nothing to cancel (no bookings, or none are "
+                                "within the cancellation window).")
+            return
+        text = ("Cancellable bookings:\n\n"
+                + "\n".join(f"{i + 1}. {_fmt_booking(b)}"
+                            for i, b in cancellable))
+        rows = [[{"text": f"❌ Cancel #{i + 1}",
+                  "callback_data": f"cx:{b['details_id']}"}]
+                for i, b in cancellable]
+        self._send(chat_id, text, {"inline_keyboard": rows})
+
+    def _on_autobook(self, chat_id: int, args: list) -> None:
+        if args:
+            try:
+                date = parse_date(args[0])
+            except ValueError as e:
+                self._send(chat_id, f"❌ {e}")
+                return
+        else:
+            date = datetime.now() + timedelta(days=6)
+        date_str = date.strftime("%Y-%m-%d")
+        if already_booked_successfully(date_str):
+            self._send(chat_id, f"Already booked {date:%a %d %b} "
+                                f"successfully (booked.json) — not booking "
+                                f"again.")
+            return
+        try:
+            s = get_authenticated_session(self.cfg)
+            html = fetch_booking_page(s, self.cfg)
+            meta = parse_booking_meta(html)
+            slots = get_available_slots(s, self.cfg, to_api_date(date_str),
+                                        meta)
+        except RuntimeError as e:
+            self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
+                                f"login.")
+            return
+        preferred = preferred_slot_starts(self.cfg)
+        best = pick_best_slot(slots, preferred)
+        if best is None:
+            self._send(chat_id, f"None of your preferred slots "
+                                f"({', '.join(preferred)}) are free on "
+                                f"{date:%a %d %b}.\n\nFree slots:\n"
+                                + "\n".join(f"  {sl['label']}" for sl in slots)
+                                + "\n\nUse /book to pick one manually.")
+            return
+        self.pending[chat_id] = {"action": "confirm", "date": date_str,
+                                 "slot": best}
+        self._send(chat_id, f"Autobook best match: {best['label']} on "
+                            f"{date:%a %d %b}?",
+                   self._confirm_book_keyboard())
+
+    # ---- inline keyboards / callbacks ------------------------------------- #
+    def _confirm_book_keyboard(self) -> dict:
+        return {"inline_keyboard": [[
+            {"text": "✅ Yes, book", "callback_data": "bk:yes"},
+            {"text": "❌ No", "callback_data": "bk:no"},
+        ]]}
+
+    def _on_callback(self, cq: dict) -> None:
+        chat_id = cq["from"]["id"]
+        data = cq.get("data") or ""
+        try:
+            self.api.answer_callback_query(cq["id"], "…")
+        except TelegramError as e:
+            print(f"[telegram] answerCallbackQuery failed: {e}", flush=True)
+        if chat_id not in self.chat_ids:
+            return
+        if data.startswith("date:"):
+            date = datetime.strptime(data[5:], "%Y-%m-%d")
+            self._show_slots(chat_id, date)
+        elif data.startswith("slot:"):
+            st = self.pending.get(chat_id, {})
+            if st.get("action") != "pick_slot":
+                self._send(chat_id, "Flow expired — start again with /book.")
+                return
+            try:
+                slot = st["slots"][int(data[5:])]
+            except (ValueError, IndexError):
+                self._send(chat_id, "Flow expired — start again with /book.")
+                return
+            st["action"] = "confirm"
+            st["slot"] = slot
+            self._send(chat_id, f"Book {slot['label']} on {st['date']}?",
+                       self._confirm_book_keyboard())
+        elif data == "bk:yes":
+            st = self.pending.get(chat_id, {})
+            if st.get("action") != "confirm":
+                self._send(chat_id, "Nothing to confirm — start with /book.")
+                return
+            self._do_book(chat_id, st["date"], st["slot"])
+        elif data == "bk:no":
+            self.pending.pop(chat_id, None)
+            self._send(chat_id, "Aborted — nothing was booked.")
+        elif data.startswith("cx:"):
+            self.pending[chat_id] = {"action": "confirm_cancel",
+                                     "cancel_id": data[3:]}
+            self._send(chat_id, "Cancel this booking?",
+                       {"inline_keyboard": [[
+                           {"text": "✅ Yes, cancel",
+                            "callback_data": "cxc:yes"},
+                           {"text": "❌ Keep it", "callback_data": "cxc:no"},
+                       ]]})
+        elif data == "cxc:yes":
+            st = self.pending.get(chat_id, {})
+            if st.get("action") != "confirm_cancel":
+                self._send(chat_id, "Nothing to cancel — see /mybookings.")
+                return
+            try:
+                s = get_authenticated_session(self.cfg)
+                ok, msg = cancel_booking(s, st["cancel_id"])
+            except RuntimeError as e:
+                self._send(chat_id, f"⚠️ {e}")
+                return
+            self.pending.pop(chat_id, None)
+            if ok:
+                self._send(chat_id, "✅ Booking cancelled.")
+            else:
+                self._send(chat_id, f"❌ Cancel failed: {msg}")
+        elif data == "cxc:no":
+            self.pending.pop(chat_id, None)
+            self._send(chat_id, "Kept — booking untouched.")
+        else:
+            self._send(chat_id, "Unknown action — start again with /help.")
+
+    def _do_book(self, chat_id: int, date_str: str, slot: dict) -> None:
+        self._send(chat_id, "⏳ Submitting booking…")
+        try:
+            s = get_authenticated_session(self.cfg)
+            html = fetch_booking_page(s, self.cfg)
+            meta = parse_booking_meta(html)
+            submit_booking(s, self.cfg, meta, date_str, slot,
+                           self.cfg.get("description", "Padel booking"))
+            ok = verify_booking_created(s, date_str, slot["start"])
+        except RuntimeError as e:
+            self.pending.pop(chat_id, None)
+            self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
+                                f"login.")
+            return
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self.pending.pop(chat_id, None)
+            self._send(chat_id, f"❌ Booking error: {e}")
+            return
+        record_booking(date_str, slot["label"], ok)
+        self.pending.pop(chat_id, None)
+        if ok:
+            self._send(chat_id, f"✅ BOOKED: {slot['label']} on {date_str}\n\n"
+                                f"Verified — it now appears in your "
+                                f"'My Bookings'.")
+        else:
+            self._send(chat_id, f"❌ Booking FAILED for {slot['label']} on "
+                                f"{date_str}.\nThe portal did not create it "
+                                f"(check the daemon/terminal log for the "
+                                f"portal's error).")

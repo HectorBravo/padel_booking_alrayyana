@@ -33,6 +33,7 @@ Usage:
   python3 padel_booking.py autobook [date] [--dry-run]   # book a preferred slot now
   python3 padel_booking.py keepalive               # refresh the persisted session
   python3 padel_booking.py daemon [--dry-run]      # resident bot: book target days at midnight
+  python3 padel_booking.py telegram               # interactive Telegram bot
 
 Auto-booking bot (daemon):
   The portal opens each day's bookings at midnight (00:00) for the date 6 days
@@ -1231,6 +1232,12 @@ def cmd_keepalive(cfg: dict, _args: list) -> None:
     print("Keep-alive OK. Session refreshed and saved.")
 
 
+def cmd_telegram(cfg: dict, _args: list) -> None:
+    """CLI: run the interactive Telegram bot (long polling)."""
+    from padel_telegram import PadelBot  # local import keeps the CLI light
+    PadelBot(cfg).run()
+
+
 def cmd_daemon(cfg: dict, args: list) -> None:
     """Resident bot: keep-alive + book target days at midnight."""
     dry_run = "--dry-run" in args
@@ -1326,7 +1333,7 @@ def main() -> None:
     """Parse the command line and dispatch to the matching command."""
     commands = ("login-start", "login-finish", "login-status", "explore", "slots",
                 "book", "pick", "mybookings", "cancel", "autobook",
-                "keepalive", "daemon")
+                "keepalive", "daemon", "telegram")
     if len(sys.argv) < 2 or sys.argv[1] not in commands:
         print(__doc__)
         sys.exit(1)
@@ -1357,6 +1364,8 @@ def main() -> None:
         cmd_keepalive(cfg, args)
     elif cmd == "daemon":
         cmd_daemon(cfg, args)
+    elif cmd == "telegram":
+        cmd_telegram(cfg, args)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ Config keys (config.json, gitignored):
 import json
 import re
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -218,15 +219,25 @@ class PadelBot:
         self.api = TelegramAPI(self.token)
         self.state = load_state()
         self.pending: dict = {}   # chat_id -> in-progress flow state
+        self._stop = threading.Event()   # set to ask the poll worker to exit
+        self._fatal: str | None = None   # worker's fatal-error message
 
     def run(self) -> None:
-        """Validate the token, publish the command menu, then long-poll."""
+        """Validate the token, publish the command menu, then long-poll.
+
+        The blocking getUpdates call runs on a daemon worker thread: on
+        Windows a Ctrl+C is only delivered to the main thread once it
+        returns to Python bytecode, and libcurl holds it for the whole
+        poll window (up to 50s) otherwise. Keeping the main thread in
+        short, interruptible sleeps makes Ctrl+C stop the bot at once.
+        """
         try:
             me = self.api.get_me()
         except TelegramError as e:
             sys.exit(f"ERROR: {e}")
         _log(f"[telegram] bot @{me['username']} ready; "
               f"allowed chats: {self.chat_ids}")
+        _log("[telegram] stop the bot with Ctrl+C")
         commands = [
             {"command": "start", "description": "Show the command list"},
             {"command": "help", "description": "Show the command list"},
@@ -243,20 +254,43 @@ class PadelBot:
             self.api.set_my_commands(commands)
         except TelegramError as e:
             _log(f"[telegram] warning: command menu not set: {e}")
-        while True:
+        worker = threading.Thread(target=self._poll_loop, daemon=True)
+        worker.start()
+        try:
+            while worker.is_alive():
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            _log("\n[telegram] Ctrl+C — shutting down…")
+            self._stop.set()
+            worker.join(timeout=3)
+            _log("[telegram] stopped. Bye!")
+            return
+        if self._fatal:
+            sys.exit(f"ERROR: {self._fatal}")
+
+    def _poll_loop(self) -> None:
+        """Worker thread: long-poll for updates until stopped or fatal."""
+        while not self._stop.is_set():
             try:
                 updates = self.api.get_updates(
                     offset=self.state.get("offset"), timeout=50)
             except TelegramError as e:
                 if e.code == 409:
-                    sys.exit("ERROR: 409 Conflict — another instance of this "
-                             "bot is already polling (e.g. the daemon or "
-                             "another terminal). Stop it, then retry.")
+                    self._fatal = ("409 Conflict — another instance of this "
+                                   "bot is already polling (e.g. the daemon "
+                                   "or another terminal). Stop it, then "
+                                   "retry.")
+                    return
                 _log(f"[telegram] polling error: {e} — retrying in 5s")
                 time.sleep(5)
                 continue
             for u in updates:
-                self._handle(u)
+                if self._stop.is_set():
+                    return
+                try:
+                    self._handle(u)
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    _log(f"[telegram] error handling an update: {e}")
             if updates:
                 self.state["offset"] = updates[-1]["update_id"] + 1
                 save_state(self.state)

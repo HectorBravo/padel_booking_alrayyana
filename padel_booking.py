@@ -1239,7 +1239,12 @@ def cmd_keepalive(cfg: dict, _args: list) -> None:
 def cmd_telegram(cfg: dict, _args: list) -> None:
     """CLI: run the interactive Telegram bot (long polling)."""
     from padel_telegram import PadelBot  # local import keeps the CLI light
-    PadelBot(cfg).run()
+    try:
+        PadelBot(cfg).run()
+    except KeyboardInterrupt:
+        # Ctrl+C before/while the poll worker is starting up (e.g. during
+        # the initial getMe). run() handles the steady-state case itself.
+        print("\n[telegram] stopped.", flush=True)
 
 
 def cmd_daemon(cfg: dict, args: list) -> None:

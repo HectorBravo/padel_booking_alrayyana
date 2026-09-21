@@ -28,6 +28,8 @@ Automates booking the Al Rayyana community padel court on the Asteco portal
 | `config.json`      | Credentials + booking defaults (email, password, …)  | `600`     |
 | `session.json`     | Persisted login session (cookies)                    | `600`     |
 | `pending_login.json`| Temporary state between login-start and login-finish | `600`     |
+| `padel_telegram.py` | Telegram bot API client + interactive bot (login/OTP, book, cancel) + daemon notifications | —         |
+| `TELEGRAM.md` | Step-by-step Telegram bot setup guide | —         |
 
 `config.json`, `session.json` and `pending_login.json` are **never** meant to
 be committed (see `.gitignore`) and are created with owner-only permissions
@@ -134,6 +136,9 @@ python3 padel_booking.py cancel
 #     ...or target one directly by booking-id, details-id, or date:
 python3 padel_booking.py cancel 7937374
 python3 padel_booking.py cancel 2026-09-27
+
+# 7) Interactive Telegram bot (login, book, cancel from your phone)
+python3 padel_booking.py telegram               # interactive Telegram bot (login, book, cancel)
 ```
 
 Dates accept `YYYY-MM-DD`, `DD/MM/YYYY` or `DD-MM-YYYY`.
@@ -191,6 +196,17 @@ python3 padel_booking.py daemon --dry-run
 - The daemon books **at/after** midnight (within the 5h race window), so if it
   was briefly down it will still catch up the same night (while the slot is
   still free).
+
+## Telegram bot
+
+Control everything from Telegram: log in with the emailed OTP (the bot asks
+you for the code in chat), check availability, book, list and cancel bookings —
+plus daemon alerts and **automatic re-login** when the session expires.
+
+- Setup: create a bot with **@BotFather**, get your chat id, add
+  `telegram_bot_token` + `telegram_chat_ids` to `config.json`, then run
+  `python padel_booking.py telegram`.
+- Full step-by-step guide: see **[TELEGRAM.md](TELEGRAM.md)**.
 
 ## Notes
 - If the session expires, re-run `login-start` + `login-finish`.

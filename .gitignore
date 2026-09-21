@@ -3,6 +3,7 @@ config.json
 session.json
 pending_login.json
 booked.json
+telegram_state.json
 
 # Debug artifacts
 booking_page.html

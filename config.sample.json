@@ -9,5 +9,7 @@
   "min_start_hour": "18:00",
   "description": "Padel booking",
   "keepalive_minutes": 20,
-  "booking_open_hour": 0
+  "booking_open_hour": 0,
+  "telegram_bot_token": "123456:ABC-your-telegram-bot-token",
+  "telegram_chat_ids": [123456789]
 }

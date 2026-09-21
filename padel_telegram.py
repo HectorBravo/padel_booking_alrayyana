@@ -28,7 +28,7 @@ from padel_booking import (
     submit_booking, verify_booking_created, record_booking,
     already_booked_successfully, fetch_my_bookings, cancel_booking,
     is_cancellable, is_cancelled, _fmt_booking, parse_date, to_api_date,
-    preferred_slot_starts, pick_best_slot, keepalive,
+    preferred_slot_starts, pick_best_slot, keepalive, run_autobook_loop,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -254,6 +254,14 @@ class PadelBot:
             self.api.set_my_commands(commands)
         except TelegramError as e:
             _log(f"[telegram] warning: command menu not set: {e}")
+        # Start the background autobooking scheduler (keep-alive + booking
+        # race) so `python padel_booking.py telegram` also autobooks and
+        # pushes Telegram notifications (booked / failed / OTP expiry).
+        sched = threading.Thread(target=self._autobook_loop, daemon=True)
+        sched.start()
+        self._notify("🤖 Padel bot started — autobooking is active.\n"
+                     "I'll book your preferred slot automatically when the "
+                     "window opens and let you know right here.")
         worker = threading.Thread(target=self._poll_loop, daemon=True)
         worker.start()
         try:
@@ -330,16 +338,29 @@ class PadelBot:
         text = (m.get("text") or "").strip()
 
         # Pending OTP flow: the next message should be the code from email.
+        # If a background autobook re-login is waiting on this code, signal it.
         if self.pending.get(chat_id, {}).get("action") == "otp":
             digits = re.sub(r"\D", "", text)
+            st = self.pending.get(chat_id, {})
+            waiter = st.get("_waiter")
+            state = st.get("_state")
             if 4 <= len(digits) <= 8:
                 self.pending.pop(chat_id, None)
                 try:
                     login_finish(self.cfg, digits)
                     self._send(chat_id, "✅ Login successful — session saved.")
+                    if state is not None:
+                        state["ok"] = True
+                    if waiter is not None:
+                        waiter.set()
                 except Exception as e:  # pylint: disable=broad-exception-caught
                     self._send(chat_id, f"❌ Login failed: {e}\n\n"
                                         f"Send /login to try again.")
+                    if state is not None:
+                        state["ok"] = False
+                        state["error"] = str(e)
+                    if waiter is not None:
+                        waiter.set()
             else:
                 self._send(chat_id, "That doesn't look like the OTP code. "
                                     "Reply with the 6-digit code from your "
@@ -637,6 +658,69 @@ class PadelBot:
                                 f"{date_str}.\nThe portal did not create it "
                                 f"(check the daemon/terminal log for the "
                                 f"portal's error).")
+
+    # ---- background autobooking (keep-alive + booking race) -------------- #
+    def _notify(self, text: str) -> None:
+        """Broadcast a notification to all whitelisted chats (never raises)."""
+        for chat in self.chat_ids:
+            try:
+                self.api.send_message(chat, text)
+            except TelegramError as e:
+                _log(f"[telegram] notify {chat} failed: {e}")
+
+    def _sched_log(self, msg: str) -> None:
+        _log(f"[autobook] {msg}")
+
+    def _relogin(self) -> bool:
+        """Restore an expired session using the bot's own OTP capture.
+
+        Triggers a fresh OTP email, asks the user to reply with the code in
+        chat (captured by the normal poll loop — no second getUpdates poller,
+        so no 409 conflict), and blocks until the code arrives or it times
+        out. Returns True only when the login finished successfully.
+        """
+        try:
+            login_start(self.cfg)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self._notify(f"❌ Could not start re-login: {e}")
+            return False
+        event = threading.Event()
+        state = {"ok": False, "error": None}
+        for chat in self.chat_ids:
+            self.pending[chat] = {"action": "otp", "_waiter": event,
+                                  "_state": state}
+        self._notify("⚠️ Session expired — I triggered a fresh login.\n"
+                     "📧 Check your email and reply here with the 6-digit "
+                     "OTP code.")
+        if not event.wait(timeout=900):
+            for chat in self.chat_ids:
+                st = self.pending.get(chat, {})
+                if st.get("action") == "otp" and st.get("_waiter") is event:
+                    self.pending.pop(chat, None)
+            self._notify("⏳ No OTP received in time; will retry on the "
+                         "next pass.")
+            return False
+        if state["ok"]:
+            self._notify("✅ Session restored — autobooking is healthy "
+                         "again.")
+        else:
+            self._notify(f"❌ Re-login failed: "
+                         f"{state.get('error') or 'unknown'}\n"
+                         f"Send /login to try again.")
+        return state["ok"]
+
+    def _autobook_loop(self) -> None:
+        """Background autobooking: keep the session alive and book the
+        target day when its window opens. Notifies via Telegram on
+        success/failure and on OTP expiry."""
+        _log("[autobook] autobooking scheduler started "
+             "(keep-alive + booking race)")
+        try:
+            run_autobook_loop(self.cfg, self._sched_log,
+                              notify=self._notify, relogin=self._relogin,
+                              dry_run=False, stop_event=self._stop)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            _log(f"[autobook] scheduler stopped with error: {e}")
 
 
 # --------------------------------------------------------------------------- #

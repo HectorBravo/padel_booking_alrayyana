@@ -1247,6 +1247,142 @@ def cmd_telegram(cfg: dict, _args: list) -> None:
         print("\n[telegram] stopped.", flush=True)
 
 
+def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
+                      dry_run: bool = False, stop_event=None) -> None:
+    """Resident autobooking loop: keep the session alive and book the target
+    day (today+6) as soon as its booking window opens.
+
+    Shared by the standalone daemon and the Telegram bot (which runs it in a
+    background thread so `python padel_booking.py telegram` also autobooks).
+
+    log(msg)           -- required; where loop events are written
+    notify(text)       -- optional; broadcast a notification (e.g. Telegram)
+    relogin() -> bool  -- optional; restore an expired session (may block
+                          until the OTP is provided or it times out)
+    dry_run            -- identify the slot but do not submit the booking
+    stop_event         -- optional threading.Event; stop the loop when set
+    """
+    targets = target_weekday_set(cfg)
+    preferred = preferred_slot_starts(cfg)
+    keepalive_secs = int(cfg.get("keepalive_minutes", 20)) * 60
+    open_hour = int(cfg.get("booking_open_hour", 0))
+
+    def notify_(text: str) -> None:
+        if notify is None:
+            return
+        try:
+            notify(text)
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+
+    def ensure_session() -> bool:
+        """Return True when the session is valid; otherwise try re-login."""
+        try:
+            keepalive(cfg)
+            return True
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            if relogin is None:
+                return False
+            log(f"Session invalid ({e}); asking for a fresh OTP...")
+            try:
+                ok = relogin()
+            except Exception as e2:  # pylint: disable=broad-exception-caught
+                log(f"re-login raised: {e2}")
+                return False
+            if ok:
+                log("Session restored via OTP login.")
+            else:
+                log("Re-login failed; will retry on the next pass.")
+            return ok
+
+    last_keepalive = time.time()
+    last_book_day = None
+    while not (stop_event is not None and stop_event.is_set()):
+        now = datetime.now()
+
+        # --- keep-alive ---------------------------------------------------
+        if time.time() - last_keepalive >= keepalive_secs:
+            try:
+                keepalive(cfg)
+                log("Keep-alive OK (session refreshed).")
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                log(f"WARNING: keep-alive failed: {e}. "
+                    f"Session may be expired - re-login needed!")
+                if relogin is not None:
+                    ensure_session()
+            last_keepalive = time.time()
+
+        # --- booking window (opens at open_hour, race runs up to 5h) -------
+        open_dt = now.replace(hour=open_hour, minute=0, second=0,
+                              microsecond=0)
+        race_deadline = open_dt + timedelta(hours=5)
+        if (open_dt <= now < race_deadline
+                and last_book_day != now.date()):
+            target = (now + timedelta(days=6)).date()
+            target_str = target.strftime("%Y-%m-%d")
+            if target.weekday() not in targets:
+                last_book_day = now.date()
+                log(f"Window opened but {target:%a %d %b} is not a target "
+                    f"day; skipping.")
+            elif already_booked_successfully(target_str):
+                last_book_day = now.date()
+                log(f"Already booked {target:%a %d %b} successfully; "
+                    f"skipping (see booked.json).")
+            elif not ensure_session():
+                log("*** SKIPPED booking: session invalid and re-login "
+                    "failed; will retry on the next pass.")
+                notify_("❌ Booking skipped: session expired and automatic "
+                        "re-login failed. Send /login in the bot when "
+                        "you're ready.")
+            else:
+                last_book_day = now.date()
+                log(f"*** Target day! Booking {target:%a %d %b %Y} "
+                    f"{'[DRY RUN]' if dry_run else ''}... "
+                    f"(one request / 30s, up to 5h)")
+                try:
+                    best, slots, r = run_booking_race(
+                        cfg, datetime.combine(target, datetime.min.time()),
+                        preferred, wait_for_open=False, timeout=18000,
+                        dry_run=dry_run)
+                    if best:
+                        if dry_run:
+                            log(f"*** DRY RUN: would book {best['label']} "
+                                f"[{best['value']}] (no booking made).")
+                        else:
+                            s = get_authenticated_session(cfg)
+                            ok = (r is not None
+                                  and verify_booking_created(
+                                      s, target_str, best["start"]))
+                            record_booking(target_str, best["label"], ok)
+                            if ok:
+                                log(f"*** BOOKED {best['label']} "
+                                    f"[{best['value']}] "
+                                    f"(confirmed in My Bookings)")
+                                notify_(f"✅ BOOKED {best['label']} "
+                                        f"for {target:%a %d %b} "
+                                        f"(confirmed in My Bookings)")
+                            else:
+                                err = (_booking_error(r) if r else "no response")
+                                if not err:
+                                    err = ("no response" if r is None else
+                                           "not created; check My Bookings")
+                                log(f"*** FAILED to book {best['label']} "
+                                    f"[{best['value']}]: {err}")
+                                notify_(f"❌ FAILED to book {best['label']} "
+                                        f"for {target:%a %d %b}: {err}")
+                    else:
+                        log("*** FAILED: no preferred slot available "
+                            f"({len(slots)} slots seen).")
+                        notify_(f"❌ No preferred slot available for "
+                                f"{target:%a %d %b} ({len(slots)} slots "
+                                f"seen).")
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    log(f"*** ERROR during booking: {e}")
+                    notify_(f"❌ Booking error: {e}")
+
+        time.sleep(0.5)
+
+
 def cmd_daemon(cfg: dict, args: list) -> None:
     """Resident bot: keep-alive + book target days at midnight."""
     dry_run = "--dry-run" in args
@@ -1283,120 +1419,9 @@ def cmd_daemon(cfg: dict, args: list) -> None:
             "(OTP needs a human). Re-run login-start/login-finish if you see "
             "a session-expired warning.")
 
-    def ensure_session() -> bool:
-        """Return True when the session is valid; otherwise try the
-        Telegram OTP re-login once."""
-        try:
-            keepalive(cfg)
-            return True
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            if relogin is None:
-                return False
-            log(f"Session invalid ({e}); asking for a fresh OTP via "
-                "Telegram...")
-            ok = relogin(cfg)
-            if ok:
-                log("Session restored via Telegram OTP login.")
-            else:
-                log("Telegram re-login failed; will retry on the next pass.")
-            return ok
-
-    last_keepalive = time.time()
-    last_book_day = None
-    while True:
-        now = datetime.now()
-
-        # --- keep-alive ---------------------------------------------------
-        if time.time() - last_keepalive >= keepalive_secs:
-            try:
-                keepalive(cfg)
-                log("Keep-alive OK (session refreshed).")
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                log(f"WARNING: keep-alive failed: {e}. "
-                    f"Session may be expired - re-login needed!")
-                if relogin is not None:
-                    ensure_session()
-            last_keepalive = time.time()
-
-        # --- booking window (opens at open_hour, race runs up to 5h) -------
-        # The window for (today + 6) opens at open_hour today. Fire the race
-        # once, at/after open_hour, and only while we are still inside the
-        # 5h race window (so a daemon started mid-day does not fire late).
-        open_dt = now.replace(hour=open_hour, minute=0, second=0,
-                              microsecond=0)
-        race_deadline = open_dt + timedelta(hours=5)
-        if (open_dt <= now < race_deadline
-                and last_book_day != now.date()):
-            target = (now + timedelta(days=6)).date()
-            target_str = target.strftime("%Y-%m-%d")
-            if target.weekday() not in targets:
-                last_book_day = now.date()
-                log(f"Window opened but {target:%a %d %b} is not a target "
-                    f"day; skipping.")
-            elif already_booked_successfully(target_str):
-                last_book_day = now.date()
-                log(f"Already booked {target:%a %d %b} successfully; "
-                    f"skipping (see booked.json).")
-            elif not ensure_session():
-                log("*** SKIPPED booking: session invalid and re-login "
-                    "failed; will retry on the next pass (log in via the "
-                    "Telegram bot to unblock).")
-                if tg:
-                    tg.notify("❌ Booking skipped: session expired and "
-                              "automatic re-login failed. Send /login in "
-                              "the bot when you're ready.")
-            else:
-                last_book_day = now.date()
-                log(f"*** Target day! Booking {target:%a %d %b %Y} "
-                    f"{'[DRY RUN]' if dry_run else ''}... "
-                    f"(one request / 30s, up to 5h)")
-                try:
-                    best, slots, r = run_booking_race(
-                        cfg, datetime.combine(target, datetime.min.time()),
-                        preferred, wait_for_open=False, timeout=18000,
-                        dry_run=dry_run)
-                    if best:
-                        if dry_run:
-                            log(f"*** DRY RUN: would book {best['label']} "
-                                f"[{best['value']}] (no booking made).")
-                        else:
-                            s = get_authenticated_session(cfg)
-                            ok = (r is not None
-                                  and verify_booking_created(
-                                      s, target_str, best["start"]))
-                            record_booking(target_str, best["label"], ok)
-                            if ok:
-                                log(f"*** BOOKED {best['label']} "
-                                    f"[{best['value']}] "
-                                    f"(confirmed in My Bookings)")
-                                if tg:
-                                    tg.notify(f"✅ BOOKED {best['label']} "
-                                              f"for {target:%a %d %b} "
-                                              f"(confirmed in My Bookings)")
-                            else:
-                                err = (_booking_error(r) if r else "no response")
-                                if not err:
-                                    err = ("no response" if r is None else
-                                           "not created; check My Bookings")
-                                log(f"*** FAILED to book {best['label']} "
-                                    f"[{best['value']}]: {err}")
-                                if tg:
-                                    tg.notify(f"❌ FAILED to book "
-                                              f"{best['label']} for "
-                                              f"{target:%a %d %b}: {err}")
-                    else:
-                        log("*** FAILED: no preferred slot available "
-                            f"({len(slots)} slots seen).")
-                        if tg:
-                            tg.notify(f"❌ No preferred slot available for "
-                                      f"{target:%a %d %b} ({len(slots)} "
-                                      f"slots seen).")
-                except Exception as e:  # pylint: disable=broad-exception-caught
-                    log(f"*** ERROR during booking: {e}")
-                    if tg:
-                        tg.notify(f"❌ Booking error: {e}")
-
-        time.sleep(0.5)
+    relogin_cb = (lambda: relogin(cfg)) if relogin else None
+    run_autobook_loop(cfg, log, notify=(tg.notify if tg else None),
+                      relogin=relogin_cb, dry_run=dry_run)
 
 
 def main() -> None:

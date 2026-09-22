@@ -78,7 +78,6 @@ Windows.
      "asset_booking_id": "370",
      "unit": "09 01",
      "attendees": 4,
-     "target_weekdays": ["Sunday", "Tuesday"],
      "preferred_slots": {
        "Sunday": ["20:00", "19:00", "21:00"],
        "Tuesday": ["20:00", "21:00"]
@@ -93,9 +92,10 @@ Windows.
    (`/asset/assetbooking/370`).
 
    Bot settings (used by `autobook` / the Telegram bot):
-   - `target_weekdays` – which days of week to auto-book (e.g. `Sunday`, `Tuesday`).
-   - `preferred_slots` – **per-day** slot **start times** in priority order (`HH:MM`, 24h);
-     the bot books the first one that is free. A plain list is also accepted and applies to every day. `20:00` = 8–9pm, `19:00` = 7–8pm.
+   - `preferred_slots` — **per-day** slot **start times** in priority order (`HH:MM`, 24h);
+     the bot books the first one that is free. **The keys are the days it auto-books**,
+     so no separate `target_weekdays` is needed. A plain list is also accepted and
+     applies to every day (then the days come from `target_weekdays`). `20:00` = 8–9pm, `19:00` = 7–8pm.
    - `min_start_hour` – time cutoff (`HH:MM`, 24h, default `18:00` = 6pm):
      `slots` lists only slots from that time on, while `pick` shows all slots
      but highlights the matching ones in green. Override with `--from HH:MM`.
@@ -155,8 +155,8 @@ until it books your slot (or 5h pass).
 
 The autobooking runs **inside the Telegram bot** — start it with
 `python padel_booking.py telegram` (it autostarts). Every day at midnight it
-checks whether the newly opened date (`today + 6 days`) is one of your
-`target_weekdays`. If so, it polls the slot endpoint (one request every 30s)
+checks whether the newly opened date (`today + 6 days`) is one of the
+days in your `preferred_slots` map. If so, it polls the slot endpoint (one request every 30s)
 and books the first free slot from that day's `preferred_slots` list, retrying
 until it succeeds or 5h pass (one slot per day). It only fires on the day the
 target slot's window opens, refreshes the session every `keepalive_minutes`,

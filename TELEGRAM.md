@@ -138,7 +138,7 @@ python padel_booking.py telegram
 While it runs, the bot:
 
 - **Books your preferred slot automatically** — every day at midnight it checks
-  whether the newly opened date (`today + 6`) is one of your `target_weekdays`,
+  whether the newly opened date (`today + 6`) is one of the days in your `preferred_slots` map,
   and if so books that day's first free `preferred_slots` entry (one request
   every 30s, up to 5h).
 - **Alerts you when the session expires** (keep-alive failure) — so you know

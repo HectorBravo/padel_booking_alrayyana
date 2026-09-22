@@ -45,12 +45,13 @@ Auto-booking (runs inside the Telegram bot):
   window opens, keeps the session alive periodically, and pushes Telegram
   notifications (booked / failed / no slot / OTP re-login needed). Start or
   stop it at any time with /startautobook and /stopautobook.
-  All bot settings live in config.json (target_weekdays, preferred_slots,
-  booking_open_hour, keepalive_minutes, description).
-  'preferred_slots' is a per-day map, e.g.
+  All bot settings live in config.json (preferred_slots, booking_open_hour,
+  keepalive_minutes, description).
+  'preferred_slots' is a per-day map; its keys are the days to auto-book, e.g.
       "preferred_slots": {"Sunday": ["20:00", "19:00", "21:00"],
                           "Tuesday": ["20:00", "21:00"]}
-  (a plain list is also accepted and applies to every day).
+  (a plain list is also accepted and applies to every day, in which case
+  the days come from 'target_weekdays').
   'min_start_hour' (default "18:00") is the time cutoff: 'slots' lists only
   slots from that time on, while 'pick' shows all but highlights matching ones
   in green. Override per-run with '--from HH:MM' (e.g. '--from 00:00').
@@ -1115,9 +1116,20 @@ WEEKDAY_NAME = {v: k for k, v in WEEKDAY_NUM.items()}  # 0-6 -> "monday" ...
 
 
 def target_weekday_set(cfg: dict) -> set:
-    """The configured target weekdays as a set of 0-6 (Mon-Sun) numbers."""
-    names = cfg.get("target_weekdays", ["Sunday", "Tuesday"])
-    return {WEEKDAY_NUM[n.strip().lower()] for n in names}
+    """The configured target weekdays as a set of 0-6 (Mon-Sun) numbers.
+
+    When ``preferred_slots`` is a per-day dict (the recommended form) the
+    target days are simply its keys, so no separate ``target_weekdays`` is
+    needed. When ``preferred_slots`` is a legacy flat list (which carries no
+    day information), the days come from ``target_weekdays`` (default
+    ``["Sunday", "Tuesday"]``).
+    """
+    slots = cfg.get("preferred_slots")
+    if isinstance(slots, dict) and slots:
+        names = list(slots.keys())
+    else:
+        names = cfg.get("target_weekdays", ["Sunday", "Tuesday"])
+    return {WEEKDAY_NUM[str(n).strip().lower()] for n in names}
 
 
 def preferred_slots_for_day(cfg: dict, day_name: str) -> list:

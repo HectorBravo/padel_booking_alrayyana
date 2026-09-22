@@ -4,7 +4,6 @@
   "asset_booking_id": "370",
   "unit": "09 01",
   "attendees": 4,
-  "target_weekdays": ["Sunday", "Tuesday"],
   "preferred_slots": {
     "Sunday": ["20:00", "19:00", "21:00"],
     "Tuesday": ["20:00", "21:00"]

@@ -1163,6 +1163,32 @@ def preferred_slots_for_day(cfg: dict, day_name: str) -> list:
     return list(slots)
 
 
+def next_bookable_target(targets: set, now: datetime, open_hour: int):
+    """Nearest upcoming target day that is currently bookable.
+
+    The portal opens a day's slots at ``open_hour`` on the day that is 6 days
+    before it, so a day ``d`` is bookable once ``now`` is at/after that
+    moment (and only while ``d`` is still within the 6-day horizon). This
+    returns the *nearest* target day (within the horizon) that is not already
+    booked successfully and whose slots are open right now, so the bot both
+    races at the moment a day opens AND catches up on a day it missed while
+    it was not running. Returns a ``date`` or ``None``.
+    """
+    today = now.date()
+    for offset in range(1, 7):  # portal opens up to 6 days ahead
+        day = today + timedelta(days=offset)
+        if day.weekday() not in targets:
+            continue
+        if already_booked_successfully(day.strftime("%Y-%m-%d")):
+            continue
+        open_dt = datetime.combine(
+            day - timedelta(days=6),
+            datetime.min.time().replace(hour=open_hour))
+        if now >= open_dt:
+            return day
+    return None
+
+
 def pick_best_slot(slots: list, preferred: list):
     """Return the first available slot matching the preference order."""
     for pref in preferred:
@@ -1306,9 +1332,9 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
     dry_run            -- identify the slot but do not submit the booking
     stop_event         -- optional threading.Event; stop the loop when set
     """
-    targets = target_weekday_set(cfg)
-    keepalive_secs = int(cfg.get("keepalive_minutes", 20)) * 60
-    open_hour = int(cfg.get("booking_open_hour", 0))
+    # NOTE: ``targets``, ``keepalive_secs`` and ``open_hour`` are re-read on
+    # every pass of the loop (below) so that config changes made at runtime
+    # (e.g. the bot's /prefs command) apply without a restart.
 
     def notify_(text: str) -> None:
         if notify is None:
@@ -1339,9 +1365,21 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
             return ok
 
     last_keepalive = time.time()
-    last_book_day = None
+    last_book_day = None      # day for which a booking race was started
+    last_skip_log_day = None  # day whose "skipping" reason was already logged
+    targets = target_weekday_set(cfg)
     while not (stop_event is not None and stop_event.is_set()):
         now = datetime.now()
+
+        # Re-read the config each pass so runtime changes (e.g. the bot's
+        # /prefs command) apply without a restart.
+        try:
+            targets = target_weekday_set(cfg)
+        except KeyError as e:
+            log(f"WARNING: unknown day name {e} in preferred_slots; "
+                "keeping the previous target days.")
+        keepalive_secs = int(cfg.get("keepalive_minutes", 20)) * 60
+        open_hour = int(cfg.get("booking_open_hour", 0))
 
         # --- keep-alive ---------------------------------------------------
         if time.time() - last_keepalive >= keepalive_secs:
@@ -1355,80 +1393,75 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                     ensure_session()
             last_keepalive = time.time()
 
-        # --- booking window (opens at open_hour, race runs up to 5h) -------
-        open_dt = now.replace(hour=open_hour, minute=0, second=0,
-                              microsecond=0)
-        race_deadline = open_dt + timedelta(hours=5)
-        if (open_dt <= now < race_deadline
-                and last_book_day != now.date()):
-            target = (now + timedelta(days=6)).date()
-            target_str = target.strftime("%Y-%m-%d")
-            preferred = preferred_slots_for_day(
-                cfg, WEEKDAY_NAME[target.weekday()])
-            if target.weekday() not in targets:
-                last_book_day = now.date()
-                log(f"Window opened but {target:%a %d %b} is not a target "
-                    f"day; skipping.")
-            elif not preferred:
-                last_book_day = now.date()
-                log(f"Window opened but no preferred slots are configured "
-                    f"for {target:%A}; skipping.")
-            elif already_booked_successfully(target_str):
-                last_book_day = now.date()
-                log(f"Already booked {target:%a %d %b} successfully; "
-                    f"skipping (see booked.json).")
-            elif not ensure_session():
-                log("*** SKIPPED booking: session invalid and re-login "
-                    "failed; will retry on the next pass.")
-                notify_("❌ Booking skipped: session expired and automatic "
-                        "re-login failed. Send /login in the bot when "
-                        "you're ready.")
-            else:
-                last_book_day = now.date()
-                log(f"*** Target day! Booking {target:%a %d %b %Y} "
-                    f"(prefs: {', '.join(preferred)}) "
-                    f"{'[DRY RUN]' if dry_run else ''}... "
-                    f"(one request / 30s, up to 5h)")
-                try:
-                    best, slots, r = run_booking_race(
-                        cfg, datetime.combine(target, datetime.min.time()),
-                        preferred, wait_for_open=False, timeout=18000,
-                        dry_run=dry_run)
-                    if best:
-                        if dry_run:
-                            log(f"*** DRY RUN: would book {best['label']} "
-                                f"[{best['value']}] (no booking made).")
-                        else:
-                            s = get_authenticated_session(cfg)
-                            ok = (r is not None
-                                  and verify_booking_created(
-                                      s, target_str, best["start"]))
-                            record_booking(target_str, best["label"], ok)
-                            if ok:
-                                log(f"*** BOOKED {best['label']} "
-                                    f"[{best['value']}] "
-                                    f"(confirmed in My Bookings)")
-                                notify_(f"✅ BOOKED {best['label']} "
-                                        f"for {target:%a %d %b} "
-                                        f"(confirmed in My Bookings)")
+        # --- booking: nearest target day within the horizon that is open ---
+        # Book the closest target day whose slots are already open and that
+        # we have not booked yet. This races at the moment a day opens AND
+        # catches up on a day the bot missed while it was not running.
+        if last_book_day != now.date():
+            target = next_bookable_target(targets, now, open_hour)
+            if target is not None:
+                target_str = target.strftime("%Y-%m-%d")
+                preferred = preferred_slots_for_day(
+                    cfg, WEEKDAY_NAME[target.weekday()])
+                if not preferred:
+                    if last_skip_log_day != now.date():
+                        last_skip_log_day = now.date()
+                        log(f"Window open but no preferred slots are "
+                            f"configured for {target:%A}; skipping.")
+                elif not ensure_session():
+                    log("*** SKIPPED booking: session invalid and re-login "
+                        "failed; will retry on the next pass.")
+                    notify_("❌ Booking skipped: session expired and "
+                            "automatic re-login failed. Send /login in the "
+                            "bot when you're ready.")
+                else:
+                    last_book_day = now.date()
+                    log(f"*** Booking {target:%a %d %b %Y} "
+                        f"(prefs: {', '.join(preferred)}) "
+                        f"{'[DRY RUN]' if dry_run else ''}... "
+                        f"(one request / 30s, up to 5h)")
+                    try:
+                        best, slots, r = run_booking_race(
+                            cfg, datetime.combine(target, datetime.min.time()),
+                            preferred, wait_for_open=False, timeout=18000,
+                            dry_run=dry_run)
+                        if best:
+                            if dry_run:
+                                log(f"*** DRY RUN: would book {best['label']} "
+                                    f"[{best['value']}] (no booking made).")
                             else:
-                                err = (_booking_error(r) if r else "no response")
-                                if not err:
-                                    err = ("no response" if r is None else
-                                           "not created; check My Bookings")
-                                log(f"*** FAILED to book {best['label']} "
-                                    f"[{best['value']}]: {err}")
-                                notify_(f"❌ FAILED to book {best['label']} "
-                                        f"for {target:%a %d %b}: {err}")
-                    else:
-                        log("*** FAILED: no preferred slot available "
-                            f"({len(slots)} slots seen).")
-                        notify_(f"❌ No preferred slot available for "
-                                f"{target:%a %d %b} ({len(slots)} slots "
-                                f"seen).")
-                except Exception as e:  # pylint: disable=broad-exception-caught
-                    log(f"*** ERROR during booking: {e}")
-                    notify_(f"❌ Booking error: {e}")
+                                s = get_authenticated_session(cfg)
+                                ok = (r is not None
+                                      and verify_booking_created(
+                                          s, target_str, best["start"]))
+                                record_booking(target_str, best["label"], ok)
+                                if ok:
+                                    log(f"*** BOOKED {best['label']} "
+                                        f"[{best['value']}] "
+                                        f"(confirmed in My Bookings)")
+                                    notify_(f"✅ BOOKED {best['label']} "
+                                            f"for {target:%a %d %b} "
+                                            f"(confirmed in My Bookings)")
+                                else:
+                                    err = (_booking_error(r) if r
+                                           else "no response")
+                                    if not err:
+                                        err = ("no response" if r is None
+                                               else "not created; check "
+                                                    "My Bookings")
+                                    log(f"*** FAILED to book {best['label']} "
+                                        f"[{best['value']}]: {err}")
+                                    notify_(f"❌ FAILED to book {best['label']} "
+                                            f"for {target:%a %d %b}: {err}")
+                        else:
+                            log("*** FAILED: no preferred slot available "
+                                f"({len(slots)} slots seen).")
+                            notify_(f"❌ No preferred slot available for "
+                                    f"{target:%a %d %b} ({len(slots)} slots "
+                                    f"seen).")
+                    except Exception as e:  # pylint: disable=broad-exception-caught
+                        log(f"*** ERROR during booking: {e}")
+                        notify_(f"❌ Booking error: {e}")
 
         time.sleep(0.5)
 

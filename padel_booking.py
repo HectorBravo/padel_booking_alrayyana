@@ -804,32 +804,61 @@ def _search_form_fields(soup) -> dict:
 
 
 def _total_pages(html: str) -> int:
-    """Read 'Page 1 of N' from the pagination markup (1 when absent)."""
+    """Read 'Page 1 of N' from the pagination markup (1 when absent).
+
+    The portal only renders the pagination block when there are 2+ pages, so
+    an absent marker means a single page -- which is the correct default.
+    """
     norm = html.replace("&nbsp;", " ")
     m = re.search(r"of\s*<i>\s*<b>\s*(\d+)", norm)
     return max(1, int(m.group(1))) if m else 1
 
 
+def _status_value(soup, status_name: str):
+    """Resolve a status name (e.g. 'Approved') to the portal's numeric value
+    in the #id_service_req_status dropdown. Returns None when not found, in
+    which case the caller should fall back to an unfiltered fetch."""
+    sel = soup.find(id="id_service_req_status")
+    if not sel:
+        return None
+    target = status_name.strip().lower()
+    for opt in sel.find_all("option"):
+        if opt.get_text(strip=True).lower() == target:
+            return opt.get("value")
+    return None
+
+
 def _fetch_mybookings_page(s: requests.Session, post_url: str,
-                           fields: dict, page_num: int) -> str:
+                           fields: dict, page_num: int,
+                           status_val: str | None = None) -> str:
     """POST one page of 'My Bookings' exactly like the portal's JS does.
 
     The portal's jqAppClass.methodPost() issues:
         POST {base}/{post_url}   body: serach_val[<field_id>]=<value> ...
     and renders the returned HTML fragment in place of the table.
+
+    When status_val is given, the Status dropdown filter is applied
+    server-side, reducing the result set (and page count).
     """
     data = {f"serach_val[{k}]": (v or "") for k, v in fields.items()}
     data["serach_val[page_num]"] = str(page_num)
+    if status_val is not None:
+        data["serach_val[id_service_req_status]"] = status_val
     r = s.post(f"{BASE_URL}/{post_url}", data=data, allow_redirects=True)
     return r.text
 
 
-def fetch_my_bookings(s: requests.Session) -> list:
-    """Fetch ALL 'My Bookings', following the portal's pagination.
+def fetch_my_bookings(s: requests.Session, status: str | None = None) -> list:
+    """Fetch 'My Bookings', following the portal's pagination.
 
-    Page 1 is a normal GET; pages 2..N are the AJAX POST the browser uses
-    (see _fetch_mybookings_page).  Returns the combined, de-duplicated list
-    of booking dicts in the portal's order (newest first).
+    status: optional portal Status filter, e.g. 'Approved'. When set, the
+            portal filters server-side (fewer results / pages). All pages of
+            the (filtered) result are still fetched, in the portal's order
+            (newest first).
+
+    Page 1 is a GET (session check + to discover the #searchForm fields);
+    pages 2..N -- and page 1 when a filter is applied -- are the AJAX POST
+    the browser uses (see _fetch_mybookings_page).
     """
     r = s.get(MYBOOKINGS_URL, allow_redirects=True)
     if "/login" in r.url.lower():
@@ -837,14 +866,27 @@ def fetch_my_bookings(s: requests.Session) -> list:
     soup = BeautifulSoup(r.text, "html.parser")
     fields = _search_form_fields(soup)
     post_url = fields.get("post_url") or "booking/myBooking"
-    total = min(_total_pages(r.text), 50)  # safety cap
-    bookings = _parse_booking_rows(r.text)
+    status_val = _status_value(soup, status) if status else None
+
+    # Page 1 results: a filtered fetch must come from the POST (the GET
+    # always loads the unfiltered default); otherwise reuse the GET response.
+    if status_val is not None:
+        page1_html = _fetch_mybookings_page(s, post_url, fields, 1, status_val)
+    else:
+        page1_html = r.text
+    total = min(_total_pages(page1_html), 50)  # safety cap
+    bookings = _parse_booking_rows(page1_html)
+
     for page in range(2, total + 1):
         try:
-            html = _fetch_mybookings_page(s, post_url, fields, page)
+            html = _fetch_mybookings_page(s, post_url, fields, page, status_val)
         except Exception:  # pylint: disable=broad-exception-caught
             break  # keep the pages we have rather than fail the whole listing
-        bookings.extend(_parse_booking_rows(html))
+        page_rows = _parse_booking_rows(html)
+        if not page_rows:
+            break  # empty page: nothing further to fetch
+        bookings.extend(page_rows)
+
     # De-duplicate (pages are disjoint, but guard against any overlap).
     seen = set()
     unique = []
@@ -873,6 +915,10 @@ def verify_booking_created(s: requests.Session, date_str: str,
     except ValueError:
         return False
     try:
+        # Deliberately UNfiltered: this is the ground-truth success check, so
+        # we must find the booking regardless of its exact status (a new
+        # booking could briefly be in a non-'Approved' state). A false
+        # negative here would make the bot re-book an already-made booking.
         bookings = fetch_my_bookings(s)
     except Exception:  # pylint: disable=broad-exception-caught
         return False
@@ -1021,7 +1067,7 @@ def cmd_cancel(cfg: dict, args: list) -> None:
     booking by booking-id, details-id, or date (YYYY-MM-DD / DD/MM/YYYY).
     """
     s = get_authenticated_session(cfg)
-    bookings = fetch_my_bookings(s)
+    bookings = fetch_my_bookings(s, status="Approved")
     if not bookings:
         print("No bookings found.")
         return

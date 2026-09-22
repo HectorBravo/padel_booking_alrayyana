@@ -509,7 +509,10 @@ class PadelBot:
     def _on_mybookings(self, chat_id: int) -> None:
         try:
             s = get_authenticated_session(self.cfg)
-            bookings = fetch_my_bookings(s)
+            # Ask the portal for Approved bookings only (server-side filter),
+            # so we fetch far fewer rows/pages. The client-side filter below
+            # stays as a safety net.
+            bookings = fetch_my_bookings(s, status="Approved")
         except RuntimeError as e:
             self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
                                 f"login.")

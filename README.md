@@ -96,6 +96,7 @@ Windows.
      the bot books the first one that is free. **The keys are the days it auto-books**,
      so no separate `target_weekdays` is needed. A plain list is also accepted and
      applies to every day (then the days come from `target_weekdays`). `20:00` = 8–9pm, `19:00` = 7–8pm.
+     You can also edit this at runtime with the bot's **/prefs** command.
    - `min_start_hour` – time cutoff (`HH:MM`, 24h, default `18:00` = 6pm):
      `slots` lists only slots from that time on, while `pick` shows all slots
      but highlights the matching ones in green. Override with `--from HH:MM`.
@@ -162,6 +163,11 @@ until it succeeds or 5h pass (one slot per day). It only fires on the day the
 target slot's window opens, refreshes the session every `keepalive_minutes`,
 and messages you the result (✅ BOOKED / ❌ FAILED / no slot). Pause it with
 `/stopautobook`, resume with `/startautobook`.
+
+You can change **which days** and **which slots** it books without editing
+`config.json` by hand: send **`/prefs`** in Telegram and tap through the
+days/slots, then **Save** — it writes the per-day `preferred_slots` map back
+to `config.json` and applies it to the running bot immediately.
 
 - `autobook [date]` – one-shot: book a preferred slot for a date right now
   (useful for catch-up or manual runs).

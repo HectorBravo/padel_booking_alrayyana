@@ -106,6 +106,7 @@ terminal. Open your bot in Telegram and send `/start`.
 | `/autobook [date]` | Book your best preferred slot for a date (default: today + 6) |
 | `/startautobook` | Start the background autobooking |
 | `/stopautobook` | Stop the background autobooking |
+| `/prefs` | Set which days to book and each day's preferred slots (interactive) |
 
 Dates accept `YYYY-MM-DD`, `DD/MM/YYYY` or `DD-MM-YYYY`.
 
@@ -126,6 +127,23 @@ Dates accept `YYYY-MM-DD`, `DD/MM/YYYY` or `DD-MM-YYYY`.
 2. Check your email (and the spam folder), copy the 6-digit code.
 3. **Reply with the code in the chat** — that's it. The bot verifies it, saves
    the session, and replies "✅ Login successful — session saved."
+
+**The `/prefs` flow, step by step (set days & preferred slots):**
+
+1. Send `/prefs` — the bot lists every weekday with its current preferred
+   slots (top = tried first) and shows a button for each day, plus
+   **💾 Save** and **❌ Cancel**.
+2. **Tap a day** to open its editor. There you can:
+   - tap a slot to **remove** it,
+   - tap **➕ Add slot** and type a start time (`HH:MM`, e.g. `20:00`) to add one,
+   - tap **🔄 Disable/Enable** to turn the day off/on (enabling starts it at `20:00`).
+3. Tap **⬅ Back to days** to keep editing other days, or **💾 Save** to write
+   the result to `config.json` (as the per-day `preferred_slots` map) and apply
+   it to the running autobooking immediately — no restart needed. **❌ Cancel**
+   discards everything.
+
+> The days you enable are exactly the days the background autobooking will try
+> to book, and the per-day list is the priority order it attempts.
 
 ## 6. Background autobooking + automatic re-login
 

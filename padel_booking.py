@@ -135,6 +135,13 @@ def load_config() -> dict:
     return cfg
 
 
+def save_config(cfg: dict) -> None:
+    """Write *cfg* back to config.json (used by the bot's /prefs command)."""
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
 def new_session(restore: bool = True) -> requests.Session:
     """Create a Chrome-impersonating session, optionally restoring cookies."""
     # impersonate="chrome" presents a real Chrome TLS/HTTP2 fingerprint so the

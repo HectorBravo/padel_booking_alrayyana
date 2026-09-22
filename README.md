@@ -28,7 +28,7 @@ Automates booking the Al Rayyana community padel court on the Asteco portal
 | `config.json`      | Credentials + booking defaults (email, password, …)  | `600`     |
 | `session.json`     | Persisted login session (cookies)                    | `600`     |
 | `pending_login.json`| Temporary state between login-start and login-finish | `600`     |
-| `padel_telegram.py` | Telegram bot API client + interactive bot (login/OTP, book, cancel) + daemon notifications | —         |
+| `padel_telegram.py` | Telegram bot API client + interactive bot (login/OTP, book, autobooking) | —         |
 | `TELEGRAM.md` | Step-by-step Telegram bot setup guide | —         |
 
 `config.json`, `session.json` and `pending_login.json` are **never** meant to
@@ -48,7 +48,7 @@ runs on both, with no unguarded platform-specific code:
 - **Paths** use `pathlib` and **text I/O** is explicit UTF-8, so there are no
   separator or encoding surprises between the two OSes.
 
-The only OS differences are how you keep the `daemon` running in the background
+The only OS differences are how you keep the bot running in the background
 (see below) and the interpreter name: `python3` on Unix, usually `python` on
 Windows.
 
@@ -79,7 +79,10 @@ Windows.
      "unit": "09 01",
      "attendees": 4,
      "target_weekdays": ["Sunday", "Tuesday"],
-     "preferred_slots": ["20:00", "21:00", "19:00"],
+     "preferred_slots": {
+       "Sunday": ["20:00", "19:00", "21:00"],
+       "Tuesday": ["20:00", "21:00"]
+     },
      "min_start_hour": "18:00",
      "description": "Padel booking",
      "keepalive_minutes": 20,
@@ -89,15 +92,15 @@ Windows.
    `asset_booking_id` is the number in the booking URL
    (`/asset/assetbooking/370`).
 
-   Bot settings (used by `autobook` / `daemon`):
+   Bot settings (used by `autobook` / the Telegram bot):
    - `target_weekdays` – which days of week to auto-book (e.g. `Sunday`, `Tuesday`).
-   - `preferred_slots` – slot **start times** in priority order (`HH:MM`, 24h);
-     the bot books the first one that is free. `20:00` = 8–9pm, `19:00` = 7–8pm.
+   - `preferred_slots` – **per-day** slot **start times** in priority order (`HH:MM`, 24h);
+     the bot books the first one that is free. A plain list is also accepted and applies to every day. `20:00` = 8–9pm, `19:00` = 7–8pm.
    - `min_start_hour` – time cutoff (`HH:MM`, 24h, default `18:00` = 6pm):
      `slots` lists only slots from that time on, while `pick` shows all slots
      but highlights the matching ones in green. Override with `--from HH:MM`.
    - `booking_open_hour` – the hour (24h) the portal opens a new day (0 = midnight).
-   - `keepalive_minutes` – how often the daemon refreshes the session.
+   - `keepalive_minutes` – how often the bot refreshes the session.
    - `description` – text stored with the booking.
 
 ## Usage
@@ -143,49 +146,51 @@ python3 padel_booking.py telegram               # interactive Telegram bot (logi
 
 Dates accept `YYYY-MM-DD`, `DD/MM/YYYY` or `DD-MM-YYYY`.
 
-## Auto-booking bot
+## Auto-booking
 
 The portal opens each day's bookings at **midnight (00:00) for the date 6 days
 ahead** (e.g. Sun 27 Sep opens Mon 21 Sep at midnight). Concurrency is low, so
 the bot simply polls one request every 30s from the moment the window opens
 until it books your slot (or 5h pass).
 
-- `daemon` – resident process. Every day at midnight it checks whether the newly
-  opened date (`today + 6 days`) is one of your `target_weekdays`. If so, it
-  polls the slot endpoint (one request every 30s) and books the first free
-  `preferred_slots` entry, retrying until it succeeds or 5h pass (one slot per
-  day). It only fires on the day the target slot's window opens. It also
-  refreshes the session every `keepalive_minutes` to keep you logged in.
+The autobooking runs **inside the Telegram bot** — start it with
+`python padel_booking.py telegram` (it autostarts). Every day at midnight it
+checks whether the newly opened date (`today + 6 days`) is one of your
+`target_weekdays`. If so, it polls the slot endpoint (one request every 30s)
+and books the first free slot from that day's `preferred_slots` list, retrying
+until it succeeds or 5h pass (one slot per day). It only fires on the day the
+target slot's window opens, refreshes the session every `keepalive_minutes`,
+and messages you the result (✅ BOOKED / ❌ FAILED / no slot). Pause it with
+`/stopautobook`, resume with `/startautobook`.
+
 - `autobook [date]` – one-shot: book a preferred slot for a date right now
   (useful for catch-up or manual runs).
 - `keepalive` – manually refresh the persisted session.
 
-Run the daemon in the background and keep its log:
+Run the bot in the background and keep its log:
 
 **Unix (Linux / macOS):**
 ```bash
-nohup python3 padel_booking.py daemon >> daemon.log 2>&1 &
-tail -f daemon.log
+nohup python3 padel_booking.py telegram >> bot.log 2>&1 &
+tail -f bot.log
 ```
 
 **Windows (PowerShell)** — run it in a dedicated terminal window:
 ```powershell
-python padel_booking.py daemon *>> daemon.log
+python padel_booking.py telegram *>> bot.log
 ```
-For a hands-off bot, schedule `pythonw padel_booking.py daemon` at logon via
+For a hands-off bot, schedule `pythonw padel_booking.py telegram` at logon via
 Task Scheduler (no console window).
 
-Test the whole flow **without** submitting any real booking:
+Test a one-shot booking **without** submitting a real booking:
 ```bash
 python3 padel_booking.py autobook 2026-09-27 --dry-run
-python3 padel_booking.py daemon --dry-run
 ```
 
 ### Important caveats
-- **The bot cannot re-login by itself.** Login needs a human-supplied email OTP.
-  The keep-alive is meant to prevent the session from expiring, but if you see a
-  `session expired` warning in the log, run `login-start` + `login-finish`
-  before the next midnight.
+- **The bot re-logs in through Telegram.** Login needs a human-supplied email
+  OTP; when the session expires the bot asks you for the code in chat and
+  completes the login automatically.
 - **It is a race.** Concurrency is low, so the bot polls one request every 30s
   from the moment the window opens and keeps trying until it books (or 5h
   pass). If your top preference is taken, it falls back to the next one.
@@ -193,15 +198,16 @@ python3 padel_booking.py daemon --dry-run
   *available* slots. The court's bookable window is 9am–10pm in 1-hour steps,
   so any of your preferred slots (7–8, 8–9, 9–10pm) may or may not appear
   depending on what's already been booked.
-- The daemon books **at/after** midnight (within the 5h race window), so if it
+- The bot books **at/after** midnight (within the 5h race window), so if it
   was briefly down it will still catch up the same night (while the slot is
   still free).
 
 ## Telegram bot
 
 Control everything from Telegram: log in with the emailed OTP (the bot asks
-you for the code in chat), check availability, book, list and cancel bookings —
-plus daemon alerts and **automatic re-login** when the session expires.
+you for the code in chat), check availability, book, list and cancel bookings,
+and manage the background autobooking — plus **automatic re-login** when the
+session expires.
 
 - Setup: create a bot with **@BotFather**, get your chat id, add
   `telegram_bot_token` + `telegram_chat_ids` to `config.json`, then run

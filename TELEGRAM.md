@@ -7,11 +7,12 @@ booking automation. Once it's done, you get:
   cancel bookings with simple commands and tap-able buttons, no terminal needed.
 - **OTP login from your phone** — the bot triggers the portal's OTP email and
   asks you for the 6-digit code right in the chat.
-- **Daemon alerts** — when the background daemon runs, it messages you when it
-  starts, when the keep-alive fails (session expired), and with the result of
-  every booking attempt (✅ BOOKED / ❌ FAILED).
-- **Automatic re-login** — if the daemon's keep-alive detects the session has
-  expired, it triggers a new OTP email itself, asks you for the code in
+- **Background autobooking** — while the bot runs it books your preferred
+  slot automatically when the window opens, and messages you with the result
+  (✅ BOOKED / ❌ FAILED / no slot). Toggle it with /startautobook and
+  /stopautobook.
+- **Automatic re-login** — if the keep-alive detects the session has
+  expired, the bot triggers a new OTP email itself, asks you for the code in
   Telegram, completes the login, verifies the session, and confirms
   "✅ Session restored".
 
@@ -102,8 +103,9 @@ terminal. Open your bot in Telegram and send `/start`.
 | `/slots [date]` | List free slots for a date (or tap a date button) |
 | `/book` | Pick a date, then a slot, to book (with confirm button) |
 | `/mybookings` | List your portal bookings, with cancel buttons |
-| `/cancel` | List cancellable bookings and cancel one (with confirm button) |
 | `/autobook [date]` | Book your best preferred slot for a date (default: today + 6) |
+| `/startautobook` | Start the background autobooking |
+| `/stopautobook` | Stop the background autobooking |
 
 Dates accept `YYYY-MM-DD`, `DD/MM/YYYY` or `DD-MM-YYYY`.
 
@@ -125,17 +127,20 @@ Dates accept `YYYY-MM-DD`, `DD/MM/YYYY` or `DD-MM-YYYY`.
 3. **Reply with the code in the chat** — that's it. The bot verifies it, saves
    the session, and replies "✅ Login successful — session saved."
 
-## 6. Daemon notifications + automatic re-login
+## 6. Background autobooking + automatic re-login
 
-Run the daemon as usual:
+The bot **autostarts** the background autobooking when you run it, so just:
 
 ```bash
-python padel_booking.py daemon              # optionally: --dry-run
+python padel_booking.py telegram
 ```
 
-With Telegram configured (`telegram_bot_token` + `telegram_chat_ids` in
-`config.json`), it now also:
+While it runs, the bot:
 
+- **Books your preferred slot automatically** — every day at midnight it checks
+  whether the newly opened date (`today + 6`) is one of your `target_weekdays`,
+  and if so books that day's first free `preferred_slots` entry (one request
+  every 30s, up to 5h).
 - **Alerts you when the session expires** (keep-alive failure) — so you know
   before a booking attempt fails.
 - **Re-logs in automatically**: it requests a new OTP email itself, asks you
@@ -145,41 +150,42 @@ With Telegram configured (`telegram_bot_token` + `telegram_chat_ids` in
 - **Notifies you of every booking result** — ✅ BOOKED, or ❌ FAILED with the
   portal's error.
 
-> **IMPORTANT: only ONE process may poll updates per bot token.** Run either
-> the interactive bot (`telegram`) **or** the daemon (`daemon`) — not both at
-> the same time. The second one exits with a **409 Conflict** error ("another
-> instance of this bot is already polling (e.g. the daemon or another
-> terminal)").
+Pause the autobooking with **`/stopautobook`** and resume it with
+**`/startautobook`** (e.g. while you're re-booking manually).
+
+> **IMPORTANT: only ONE process may poll updates per bot token.** Run a single
+> `python padel_booking.py telegram` instance. A second one exits with a
+> **409 Conflict** error ("another instance of this bot is already polling").
 
 ## 7. Run it in the background
 
 **Windows:**
 
-- Quick: `pythonw padel_booking.py daemon` — runs with no console window.
+- Quick: `pythonw padel_booking.py telegram` — runs with no console window.
 - Better: a **Task Scheduler** task that starts at logon:
   - Action: `pythonw` (full path, e.g. `C:\Python312\pythonw.exe`)
-  - Argument: `padel_booking.py daemon`
+  - Argument: `padel_booking.py telegram`
   - **Start in:** the project folder (e.g. `D:\Repos\padel_booking_alrayyana`)
     — keep this, otherwise the script can't find `config.json`.
 
 **Linux / macOS:**
 
 ```bash
-nohup python padel_booking.py daemon >> daemon.log 2>&1 &
-tail -f daemon.log
+nohup python padel_booking.py telegram >> bot.log 2>&1 &
+tail -f bot.log
 ```
 
 …or a **systemd user service** (survives logout, auto-restarts). Create
-`~/.config/systemd/user/padel-daemon.service`:
+`~/.config/systemd/user/padel-bot.service`:
 
 ```ini
 [Unit]
-Description=Padel booking daemon
+Description=Padel booking bot
 After=network-online.target
 
 [Service]
 WorkingDirectory=/path/to/padel_booking_alrayyana
-ExecStart=/path/to/venv/bin/python padel_booking.py daemon
+ExecStart=/path/to/venv/bin/python padel_booking.py telegram
 Restart=on-failure
 
 [Install]
@@ -188,8 +194,8 @@ WantedBy=default.target
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now padel-daemon
-journalctl --user -u padel-daemon -f     # follow the log
+systemctl --user enable --now padel-bot
+journalctl --user -u padel-bot -f     # follow the log
 ```
 
 ## 8. Security notes
@@ -212,7 +218,7 @@ journalctl --user -u padel-daemon -f     # follow the log
 |---|---|
 | `Telegram error 401: Unauthorized` | Wrong bot token — copy it again from @BotFather and update `config.json`. |
 | `403` / "chat not found" when the bot sends a message | Wrong chat ID in `telegram_chat_ids`, or you haven't pressed **Start** on the bot yet — open the bot, tap Start, and re-check the ID with @userinfobot. |
-| `409 Conflict` | Two processes are polling the same token (bot + daemon, or two terminals). Stop the other one — only one may run at a time. |
+| `409 Conflict` | Two processes are polling the same token (two bot instances). Stop the other one — only one `telegram` instance may run at a time. |
 | Bot doesn't answer at all | Is it running? Check the terminal output for errors; make sure your chat ID is in `telegram_chat_ids`; make sure you actually sent a command (e.g. `/start`). |
 | OTP not arriving | Check your spam folder; codes expire quickly — send `/login` again and use the newest code. |
 | "⛔ This bot is private." | Your chat ID isn't in the whitelist — add it to `telegram_chat_ids` and restart the bot. |

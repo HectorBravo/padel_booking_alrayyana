@@ -32,23 +32,25 @@ Usage:
   python3 padel_booking.py cancel 7938824         #   ...or cancel by booking-id
   python3 padel_booking.py autobook [date] [--dry-run]   # book a preferred slot now
   python3 padel_booking.py keepalive               # refresh the persisted session
-  python3 padel_booking.py daemon [--dry-run]      # resident bot: book target days at midnight
-  python3 padel_booking.py telegram               # interactive Telegram bot
+  python3 padel_booking.py telegram                # interactive Telegram bot
+                                                    # (also runs the background
+                                                    # autobooking scheduler)
 
-Auto-booking bot (daemon):
+Auto-booking (runs inside the Telegram bot):
   The portal opens each day's bookings at midnight (00:00) for the date 6 days
-  ahead. The daemon books your target weekdays (default: Sunday & Tuesday) using
-  your preferred slots in priority order (default: 8-9pm, then 9-10pm, then
-  7-8pm), polling one request every 30s from the moment the window opens until
-  it books (or 5h pass). It only fires on the day the target slot's window
-  opens. It also keeps the
-  session alive periodically. Run it in the background, e.g.:
-      Unix:    nohup python3 padel_booking.py daemon >> daemon.log 2>&1 &
-      Windows: python padel_booking.py daemon   (dedicated terminal, or Task
-               Scheduler / pythonw for a hidden window)
-  Use --dry-run to test the logic without submitting any real booking.
+  ahead. While `python3 padel_booking.py telegram` is running, a background
+  scheduler books your target weekdays using that day's preferred slots in
+  priority order, polling one request every 30s from the moment the window
+  opens until it books (or 5h pass). It only fires on the day the target slot's
+  window opens, keeps the session alive periodically, and pushes Telegram
+  notifications (booked / failed / no slot / OTP re-login needed). Start or
+  stop it at any time with /startautobook and /stopautobook.
   All bot settings live in config.json (target_weekdays, preferred_slots,
-  min_start_hour, booking_open_hour, keepalive_minutes, description).
+  booking_open_hour, keepalive_minutes, description).
+  'preferred_slots' is a per-day map, e.g.
+      "preferred_slots": {"Sunday": ["20:00", "19:00", "21:00"],
+                          "Tuesday": ["20:00", "21:00"]}
+  (a plain list is also accepted and applies to every day).
   'min_start_hour' (default "18:00") is the time cutoff: 'slots' lists only
   slots from that time on, while 'pick' shows all but highlights matching ones
   in green. Override per-run with '--from HH:MM' (e.g. '--from 00:00').
@@ -1109,6 +1111,7 @@ def cmd_pick(cfg: dict, args: list) -> None:
 # --------------------------------------------------------------------------- #
 WEEKDAY_NUM = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
                "friday": 4, "saturday": 5, "sunday": 6}
+WEEKDAY_NAME = {v: k for k, v in WEEKDAY_NUM.items()}  # 0-6 -> "monday" ...
 
 
 def target_weekday_set(cfg: dict) -> set:
@@ -1117,10 +1120,28 @@ def target_weekday_set(cfg: dict) -> set:
     return {WEEKDAY_NUM[n.strip().lower()] for n in names}
 
 
-def preferred_slot_starts(cfg: dict) -> list:
-    """Preferred slot start times (HH:MM) in priority order."""
-    # start times (HH:MM) in priority order, e.g. 8-9pm -> "20:00"
-    return cfg.get("preferred_slots", ["20:00", "21:00", "19:00"])
+def preferred_slots_for_day(cfg: dict, day_name: str) -> list:
+    """Preferred slot start times (HH:MM) for *day_name*, in priority order.
+
+    Supports two config forms for ``preferred_slots``:
+      * per-day dict (recommended):
+            {"Sunday": ["20:00", "19:00", "21:00"],
+             "Tuesday": ["20:00", "21:00"]}
+      * legacy flat list (applies to every day):
+            ["20:00", "21:00", "19:00"]
+
+    Day names match case-insensitively. Returns ``[]`` when the day has no
+    configured slots (the caller should then skip booking that day).
+    """
+    slots = cfg.get("preferred_slots")
+    if slots is None:
+        return ["20:00", "21:00", "19:00"]
+    if isinstance(slots, dict):
+        lowered = {str(k).strip().lower(): v for k, v in slots.items()}
+        value = lowered.get(day_name.strip().lower(), [])
+        return list(value) if isinstance(value, list) else []
+    # Legacy flat list: the same slots for every day.
+    return list(slots)
 
 
 def pick_best_slot(slots: list, preferred: list):
@@ -1197,10 +1218,14 @@ def cmd_autobook(cfg: dict, args: list) -> None:
     target = parse_date(date_str) if date_str \
         else datetime.now() + timedelta(days=6)
 
-    preferred = preferred_slot_starts(cfg)
+    preferred = preferred_slots_for_day(cfg, target.strftime("%A"))
     target_str = target.strftime("%Y-%m-%d")
     tag = " [DRY RUN - no booking will be made]" if dry_run else ""
     print(f"Auto-booking {target:%a %d %b %Y}{tag}")
+    if not preferred:
+        print(f"  No preferred slots configured for {target:%A}; "
+              f"nothing to book.")
+        return
     print(f"  prefs: {', '.join(preferred)}")
     if not dry_run and already_booked_successfully(target_str):
         print(f"Already booked {target:%a %d %b} successfully (see "
@@ -1263,7 +1288,6 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
     stop_event         -- optional threading.Event; stop the loop when set
     """
     targets = target_weekday_set(cfg)
-    preferred = preferred_slot_starts(cfg)
     keepalive_secs = int(cfg.get("keepalive_minutes", 20)) * 60
     open_hour = int(cfg.get("booking_open_hour", 0))
 
@@ -1320,10 +1344,16 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                 and last_book_day != now.date()):
             target = (now + timedelta(days=6)).date()
             target_str = target.strftime("%Y-%m-%d")
+            preferred = preferred_slots_for_day(
+                cfg, WEEKDAY_NAME[target.weekday()])
             if target.weekday() not in targets:
                 last_book_day = now.date()
                 log(f"Window opened but {target:%a %d %b} is not a target "
                     f"day; skipping.")
+            elif not preferred:
+                last_book_day = now.date()
+                log(f"Window opened but no preferred slots are configured "
+                    f"for {target:%A}; skipping.")
             elif already_booked_successfully(target_str):
                 last_book_day = now.date()
                 log(f"Already booked {target:%a %d %b} successfully; "
@@ -1337,6 +1367,7 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
             else:
                 last_book_day = now.date()
                 log(f"*** Target day! Booking {target:%a %d %b %Y} "
+                    f"(prefs: {', '.join(preferred)}) "
                     f"{'[DRY RUN]' if dry_run else ''}... "
                     f"(one request / 30s, up to 5h)")
                 try:
@@ -1383,52 +1414,11 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
         time.sleep(0.5)
 
 
-def cmd_daemon(cfg: dict, args: list) -> None:
-    """Resident bot: keep-alive + book target days at midnight."""
-    dry_run = "--dry-run" in args
-    targets = target_weekday_set(cfg)
-    preferred = preferred_slot_starts(cfg)
-    keepalive_secs = int(cfg.get("keepalive_minutes", 20)) * 60
-    open_hour = int(cfg.get("booking_open_hour", 0))
-
-    def log(msg):
-        if sys.stdout is not None:  # safe under pythonw (no console)
-            print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
-
-    # --- optional Telegram: notifications + automatic OTP re-login ---------
-    tg = None
-    relogin = None
-    try:
-        from padel_telegram import TelegramNotifier, relogin_via_telegram
-        tg = TelegramNotifier(cfg)
-        if tg.enabled:
-            relogin = relogin_via_telegram
-    except Exception:  # pylint: disable=broad-exception-caught
-        tg, relogin = None, None
-
-    names = sorted(n for n, v in WEEKDAY_NUM.items() if v in targets)
-    log(f"Daemon started. Target weekdays: {names}; preferred slots: "
-        f"{preferred}; open at {open_hour:02d}:00; keep-alive every "
-        f"{keepalive_secs // 60} min." + (" [DRY RUN]" if dry_run else ""))
-    if relogin:
-        log("Telegram enabled: on session expiry the daemon will ask you "
-            "for a fresh OTP in chat and re-login automatically.")
-        tg.notify("🤖 Padel daemon started" + (" [DRY RUN]" if dry_run else ""))
-    else:
-        log("NOTE: if the session expires the bot CANNOT re-login by itself "
-            "(OTP needs a human). Re-run login-start/login-finish if you see "
-            "a session-expired warning.")
-
-    relogin_cb = (lambda: relogin(cfg)) if relogin else None
-    run_autobook_loop(cfg, log, notify=(tg.notify if tg else None),
-                      relogin=relogin_cb, dry_run=dry_run)
-
-
 def main() -> None:
     """Parse the command line and dispatch to the matching command."""
     commands = ("login-start", "login-finish", "login-status", "explore", "slots",
                 "book", "pick", "mybookings", "cancel", "autobook",
-                "keepalive", "daemon", "telegram")
+                "keepalive", "telegram")
     if len(sys.argv) < 2 or sys.argv[1] not in commands:
         print(__doc__)
         sys.exit(1)
@@ -1457,8 +1447,6 @@ def main() -> None:
         cmd_autobook(cfg, args)
     elif cmd == "keepalive":
         cmd_keepalive(cfg, args)
-    elif cmd == "daemon":
-        cmd_daemon(cfg, args)
     elif cmd == "telegram":
         cmd_telegram(cfg, args)
 

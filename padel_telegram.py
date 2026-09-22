@@ -4,8 +4,8 @@ Telegram integration for the padel booking automation.
 
 Talks to the Telegram Bot API (https://core.telegram.org/bots/api) using
 curl_cffi (no extra dependencies). Used by:
-  - `python padel_booking.py telegram`  (interactive bot, PadelBot)
-  - `python padel_booking.py daemon`    (notifications + OTP re-login)
+  - `python padel_booking.py telegram`  (interactive bot, PadelBot, which
+    also runs the background autobooking scheduler)
 
 Config keys (config.json, gitignored):
   "telegram_bot_token": "123456:ABC..."   # from @BotFather
@@ -27,8 +27,8 @@ from padel_booking import (
     is_logged_in, fetch_booking_page, parse_booking_meta, get_available_slots,
     submit_booking, verify_booking_created, record_booking,
     already_booked_successfully, fetch_my_bookings, cancel_booking,
-    is_cancellable, is_cancelled, _fmt_booking, parse_date, to_api_date,
-    preferred_slot_starts, pick_best_slot, keepalive, run_autobook_loop,
+    is_cancellable, is_cancelled, _booking_info, parse_date, to_api_date,
+    preferred_slots_for_day, pick_best_slot, run_autobook_loop,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -221,6 +221,10 @@ class PadelBot:
         self.pending: dict = {}   # chat_id -> in-progress flow state
         self._stop = threading.Event()   # set to ask the poll worker to exit
         self._fatal: str | None = None   # worker's fatal-error message
+        # Background autobooking scheduler (started on boot, can be toggled
+        # with /startautobook and /stopautobook).
+        self._sched_stop = threading.Event()
+        self._sched_thread: threading.Thread | None = None
 
     def run(self) -> None:
         """Validate the token, publish the command menu, then long-poll.
@@ -245,10 +249,14 @@ class PadelBot:
             {"command": "status", "description": "Check the saved session"},
             {"command": "slots", "description": "List free slots (optional: date)"},
             {"command": "book", "description": "Pick a date + slot to book"},
-            {"command": "mybookings", "description": "List your bookings"},
-            {"command": "cancel", "description": "Cancel one of your bookings"},
+            {"command": "mybookings",
+             "description": "List your bookings (cancel from here)"},
             {"command": "autobook",
              "description": "Book a preferred slot (optional: date)"},
+            {"command": "startautobook",
+             "description": "Start the background autobooking"},
+            {"command": "stopautobook",
+             "description": "Stop the background autobooking"},
         ]
         try:
             self.api.set_my_commands(commands)
@@ -257,8 +265,8 @@ class PadelBot:
         # Start the background autobooking scheduler (keep-alive + booking
         # race) so `python padel_booking.py telegram` also autobooks and
         # pushes Telegram notifications (booked / failed / OTP expiry).
-        sched = threading.Thread(target=self._autobook_loop, daemon=True)
-        sched.start()
+        # It can be toggled at runtime with /startautobook & /stopautobook.
+        self._start_autobook()
         self._notify("🤖 Padel bot started — autobooking is active.\n"
                      "I'll book your preferred slot automatically when the "
                      "window opens and let you know right here.")
@@ -269,6 +277,7 @@ class PadelBot:
                 time.sleep(0.5)
         except KeyboardInterrupt:
             _log("\n[telegram] Ctrl+C — shutting down…")
+            self._sched_stop.set()
             self._stop.set()
             worker.join(timeout=3)
             _log("[telegram] stopped. Bye!")
@@ -385,10 +394,12 @@ class PadelBot:
             self._on_book(chat_id)
         elif cmd == "/mybookings":
             self._on_mybookings(chat_id)
-        elif cmd == "/cancel":
-            self._on_cancel(chat_id)
         elif cmd == "/autobook":
             self._on_autobook(chat_id, args)
+        elif cmd == "/startautobook":
+            self._on_startautobook(chat_id)
+        elif cmd == "/stopautobook":
+            self._on_stopautobook(chat_id)
         else:
             self._send(chat_id, f"Unknown command {cmd}\n\n/help for the list.")
 
@@ -420,9 +431,10 @@ class PadelBot:
                    "/status — check whether the saved session is valid\n"
                    "/slots [date] — list free slots (or pick a date)\n"
                    "/book — pick a date, then a slot, to book\n"
-                   "/mybookings — list your portal bookings\n"
-                   "/cancel — cancel one of your bookings\n"
+                   "/mybookings — list your bookings (cancel from here)\n"
                    "/autobook [date] — book a preferred slot (default: +6d)\n"
+                   "/startautobook — start the background autobooking\n"
+                   "/stopautobook — stop the background autobooking\n"
                    "/start, /help — show this help")
 
     def _on_slots(self, chat_id: int, args: list) -> None:
@@ -481,40 +493,19 @@ class PadelBot:
             self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
                                 f"login.")
             return
-        # Only show live bookings — hide cancelled/rejected ones.
+        # Only show live bookings — hide cancelled/rejected ones (so every
+        # entry here is already approved; no need to show the status tag).
         bookings = [b for b in bookings if not is_cancelled(b)]
         if not bookings:
             self._send(chat_id, "No upcoming bookings.")
             return
         text = ("Your bookings:\n\n"
-                + "\n".join(f"{i + 1}. {_fmt_booking(b)}"
+                + "\n".join(f"{i + 1}. {_booking_info(b)}"
                             for i, b in enumerate(bookings)))
         rows = [[{"text": f"❌ Cancel #{i + 1}",
                   "callback_data": f"cx:{b['details_id']}"}]
                 for i, b in enumerate(bookings) if is_cancellable(b)]
         self._send(chat_id, text, {"inline_keyboard": rows} if rows else None)
-
-    def _on_cancel(self, chat_id: int) -> None:
-        try:
-            s = get_authenticated_session(self.cfg)
-            bookings = fetch_my_bookings(s)
-        except RuntimeError as e:
-            self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
-                                f"login.")
-            return
-        cancellable = [(i, b) for i, b in enumerate(bookings)
-                       if is_cancellable(b)]
-        if not cancellable:
-            self._send(chat_id, "Nothing to cancel (no bookings, or none are "
-                                "within the cancellation window).")
-            return
-        text = ("Cancellable bookings:\n\n"
-                + "\n".join(f"{i + 1}. {_fmt_booking(b)}"
-                            for i, b in cancellable))
-        rows = [[{"text": f"❌ Cancel #{i + 1}",
-                  "callback_data": f"cx:{b['details_id']}"}]
-                for i, b in cancellable]
-        self._send(chat_id, text, {"inline_keyboard": rows})
 
     def _on_autobook(self, chat_id: int, args: list) -> None:
         if args:
@@ -541,7 +532,13 @@ class PadelBot:
             self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
                                 f"login.")
             return
-        preferred = preferred_slot_starts(self.cfg)
+        preferred = preferred_slots_for_day(self.cfg, date.strftime("%A"))
+        if not preferred:
+            self._send(chat_id, f"No preferred slots are configured for "
+                                f"{date:%A}. Add them to 'preferred_slots' "
+                                f"in config.json, or use /book to pick one "
+                                f"manually.")
+            return
         best = pick_best_slot(slots, preferred)
         if best is None:
             self._send(chat_id, f"None of your preferred slots "
@@ -709,6 +706,35 @@ class PadelBot:
                          f"Send /login to try again.")
         return state["ok"]
 
+    def _autobook_running(self) -> bool:
+        """True when the background autobooking scheduler is alive."""
+        return (self._sched_thread is not None
+                and self._sched_thread.is_alive())
+
+    def _start_autobook(self) -> bool:
+        """Start the background autobooking scheduler.
+
+        Returns True if it was started, False if it is already running.
+        """
+        if self._autobook_running():
+            return False
+        self._sched_stop.clear()
+        self._sched_thread = threading.Thread(target=self._autobook_loop,
+                                              daemon=True)
+        self._sched_thread.start()
+        return True
+
+    def _stop_autobook(self) -> bool:
+        """Stop the background autobooking scheduler.
+
+        Returns True if a running scheduler was asked to stop, False if it
+        was not running.
+        """
+        if not self._autobook_running():
+            return False
+        self._sched_stop.set()
+        return True
+
     def _autobook_loop(self) -> None:
         """Background autobooking: keep the session alive and book the
         target day when its window opens. Notifies via Telegram on
@@ -718,104 +744,20 @@ class PadelBot:
         try:
             run_autobook_loop(self.cfg, self._sched_log,
                               notify=self._notify, relogin=self._relogin,
-                              dry_run=False, stop_event=self._stop)
+                              dry_run=False, stop_event=self._sched_stop)
         except Exception as e:  # pylint: disable=broad-exception-caught
             _log(f"[autobook] scheduler stopped with error: {e}")
 
+    def _on_startautobook(self, chat_id: int) -> None:
+        if self._start_autobook():
+            self._send(chat_id, "✅ Autobooking started — I'll book your "
+                                "preferred slot when the window opens.")
+        else:
+            self._send(chat_id, "Autobooking is already running.")
 
-# --------------------------------------------------------------------------- #
-# Daemon integration: notifications + automatic OTP re-login
-# --------------------------------------------------------------------------- #
-def _wait_for_otp(api: TelegramAPI, chat_ids: list, deadline: float,
-                  reprompt_every: int = 300) -> str | None:
-    """Poll updates until a whitelisted user replies with a numeric code.
-
-    Returns the digits, or None when *deadline* (a ``time.time()`` value)
-    passes. Tracks its own update offset so a restart mid-wait never
-    re-reads an old code.
-    """
-    offset: int | None = None
-    last_prompt = time.time()
-    while time.time() < deadline:
-        try:
-            updates = api.get_updates(offset=offset, timeout=25)
-        except TelegramError as e:
-            if e.code == 409:
-                _log("[telegram] 409 while waiting for OTP: another poller "
-                      "is active; retrying")
-                time.sleep(10)
-            else:
-                _log(f"[telegram] poll error while waiting for OTP: {e}")
-                time.sleep(5)
-            continue
-        if updates:
-            offset = updates[-1]["update_id"] + 1
-        for u in updates:
-            m = u.get("message") or {}
-            if m.get("chat", {}).get("id") not in chat_ids:
-                continue
-            digits = re.sub(r"\D", "", m.get("text") or "")
-            if 4 <= len(digits) <= 8:
-                return digits
-        if time.time() - last_prompt >= reprompt_every:
-            last_prompt = time.time()
-            for chat in chat_ids:
-                try:
-                    api.send_message(chat, "⏳ Still waiting for the OTP "
-                                           "code from your email…")
-                except TelegramError:
-                    pass
-    return None
-
-
-def relogin_via_telegram(cfg: dict, max_attempts: int = 3,
-                         wait_seconds: int = 900) -> bool:
-    """Automatic re-login for the daemon, driven through Telegram.
-
-    Triggers a fresh OTP email, asks the whitelisted user(s) for the code in
-    chat, completes the login and verifies the session with a keep-alive.
-    Returns True only when the session is valid afterwards. Never raises.
-    """
-    token, chat_ids = get_telegram_cfg(cfg)
-    if not token or not chat_ids:
-        return False
-    api = TelegramAPI(token)
-    for attempt in range(1, max_attempts + 1):
-        try:
-            login_start(cfg)
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            _log(f"[telegram] could not trigger the OTP email: {e}")
-            return False
-        for chat in chat_ids:
-            try:
-                api.send_message(chat, "⚠️ Session expired — I triggered a "
-                                       "fresh login.\n📧 Check your email "
-                                       "and reply here with the 6-digit OTP "
-                                       "code.")
-            except TelegramError as e:
-                _log(f"[telegram] ask to {chat} failed: {e}")
-        otp = _wait_for_otp(api, chat_ids, time.time() + wait_seconds)
-        if not otp:
-            _log("[telegram] no OTP received in time; will retry on the "
-                  "next keep-alive failure")
-            return False
-        try:
-            login_finish(cfg, otp)
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            _log(f"[telegram] OTP attempt {attempt}/{max_attempts} failed: "
-                  f"{e}")
-            continue
-        try:
-            keepalive(cfg)   # verify the session is really valid
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            _log(f"[telegram] login finished but session still invalid: "
-                  f"{e}")
-            continue
-        for chat in chat_ids:
-            try:
-                api.send_message(chat, "✅ Session restored — the daemon is "
-                                       "healthy again.")
-            except TelegramError:
-                pass
-        return True
-    return False
+    def _on_stopautobook(self, chat_id: int) -> None:
+        if self._stop_autobook():
+            self._send(chat_id, "⏹ Autobooking stopped. Send /startautobook "
+                                "to resume.")
+        else:
+            self._send(chat_id, "Autobooking is not running.")

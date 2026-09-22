@@ -743,17 +743,14 @@ def _parse_booking_dt(x: str):
         return None
 
 
-def fetch_my_bookings(s: requests.Session) -> list:
-    """Fetch the 'My Bookings' page and return a list of booking dicts.
+def _parse_booking_rows(html: str) -> list:
+    """Parse one 'My Bookings' page (or AJAX fragment) into booking dicts.
 
     Each dict has: booking_id, details_id, name, community, unit, from_str,
     to_str, from_dt, to_dt, status.  'details_id' is the id used by the
     portal's cancel endpoint (found in the row's 'View' link).
     """
-    r = s.get(MYBOOKINGS_URL, allow_redirects=True)
-    if "/login" in r.url.lower():
-        raise RuntimeError("Session expired. Re-login before listing bookings.")
-    soup = BeautifulSoup(r.text, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
     tbl = soup.find("table")
     bookings = []
     if not tbl:
@@ -779,6 +776,85 @@ def fetch_my_bookings(s: requests.Session) -> list:
             "status": cells[7].split(" ")[0],
         })
     return bookings
+
+
+def _search_form_fields(soup) -> dict:
+    """Collect the My Bookings search-form fields as an ordered {id: value}.
+
+    The portal's pagination JS posts every #searchForm input/select (keyed by
+    its id) as a 'serach_val' array, so we mirror exactly those fields.
+    """
+    form = soup.find(id="searchForm")
+    fields = {}
+    if not form:
+        return fields
+    for el in form.find_all(["input", "select", "textarea"]):
+        el_id = el.get("id")
+        if not el_id:
+            continue
+        if el.name == "select":
+            # jQuery .val() on a <select> is the selected option's value
+            # (first option when none is marked selected).
+            opt = el.find("option", selected=True) or el.find("option")
+            val = opt.get("value", "") if opt else ""
+        else:
+            val = el.get("value") or ""
+        fields[el_id] = val
+    return fields
+
+
+def _total_pages(html: str) -> int:
+    """Read 'Page 1 of N' from the pagination markup (1 when absent)."""
+    norm = html.replace("&nbsp;", " ")
+    m = re.search(r"of\s*<i>\s*<b>\s*(\d+)", norm)
+    return max(1, int(m.group(1))) if m else 1
+
+
+def _fetch_mybookings_page(s: requests.Session, post_url: str,
+                           fields: dict, page_num: int) -> str:
+    """POST one page of 'My Bookings' exactly like the portal's JS does.
+
+    The portal's jqAppClass.methodPost() issues:
+        POST {base}/{post_url}   body: serach_val[<field_id>]=<value> ...
+    and renders the returned HTML fragment in place of the table.
+    """
+    data = {f"serach_val[{k}]": (v or "") for k, v in fields.items()}
+    data["serach_val[page_num]"] = str(page_num)
+    r = s.post(f"{BASE_URL}/{post_url}", data=data, allow_redirects=True)
+    return r.text
+
+
+def fetch_my_bookings(s: requests.Session) -> list:
+    """Fetch ALL 'My Bookings', following the portal's pagination.
+
+    Page 1 is a normal GET; pages 2..N are the AJAX POST the browser uses
+    (see _fetch_mybookings_page).  Returns the combined, de-duplicated list
+    of booking dicts in the portal's order (newest first).
+    """
+    r = s.get(MYBOOKINGS_URL, allow_redirects=True)
+    if "/login" in r.url.lower():
+        raise RuntimeError("Session expired. Re-login before listing bookings.")
+    soup = BeautifulSoup(r.text, "html.parser")
+    fields = _search_form_fields(soup)
+    post_url = fields.get("post_url") or "booking/myBooking"
+    total = min(_total_pages(r.text), 50)  # safety cap
+    bookings = _parse_booking_rows(r.text)
+    for page in range(2, total + 1):
+        try:
+            html = _fetch_mybookings_page(s, post_url, fields, page)
+        except Exception:  # pylint: disable=broad-exception-caught
+            break  # keep the pages we have rather than fail the whole listing
+        bookings.extend(_parse_booking_rows(html))
+    # De-duplicate (pages are disjoint, but guard against any overlap).
+    seen = set()
+    unique = []
+    for b in bookings:
+        key = b.get("details_id") or b.get("booking_id")
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(b)
+    return unique
 
 
 def verify_booking_created(s: requests.Session, date_str: str,

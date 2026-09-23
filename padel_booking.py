@@ -82,10 +82,11 @@ SESSION_FILE = HERE / "session.json"
 # Colors are emitted only when stdout is an interactive terminal and the user
 # hasn't opted out via NO_COLOR, so piped/log output stays clean.
 _COLORS = {
-    "grey":  "\033[90m",
-    "red":   "\033[31m",
-    "green": "\033[32m",
-    "reset": "\033[0m",
+    "grey":   "\033[90m",
+    "red":    "\033[31m",
+    "green":  "\033[32m",
+    "strike": "\033[9m",
+    "reset":  "\033[0m",
 }
 ANSI_STATE = {"ready": False}
 
@@ -1010,9 +1011,10 @@ def cmd_mybookings(cfg: dict, args: list) -> None:
     """List the user's bookings from the portal's 'My Bookings' page.
 
     Optionally filter to a single date, e.g. 'mybookings 2026-09-26'.
-    Bookings are listed oldest to newest; each shows its status
-    (approved/cancelled) and is colored: grey if in the past, red if
-    cancelled, green if approved.
+    Bookings are listed newest to oldest (most distant future first, past
+    bookings sink to the bottom); each shows its status
+    (approved/cancelled) and is colored: grey + strikethrough if in the
+    past, red if cancelled, green if approved.
     """
     s = get_authenticated_session(cfg)
     bookings = fetch_my_bookings(s)
@@ -1040,7 +1042,8 @@ def cmd_mybookings(cfg: dict, args: list) -> None:
     else:
         shown = bookings
         print(f"Your bookings ({len(shown)}):")
-    shown = sorted(shown, key=lambda b: b["from_dt"] or datetime.min)
+    shown = sorted(shown, key=lambda b: b["from_dt"] or datetime.min,
+                   reverse=True)
     print("-" * 78)
     for i, b in enumerate(shown, 1):
         idx = f"  [{i:>2}] "
@@ -1048,7 +1051,8 @@ def cmd_mybookings(cfg: dict, args: list) -> None:
         label = _booking_label(b)
         state = _booking_state(b, now)
         if state == "past":
-            print(_paint(idx + info + f"   [{label}]", "grey"))
+            print(_paint(_paint(idx + info + f"   [{label}]", "grey"),
+                         "strike"))
         elif state == "cancelled":
             print(idx + info + _paint(f"   [{label}]", "red"))
         else:

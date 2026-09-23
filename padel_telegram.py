@@ -12,6 +12,7 @@ Config keys (config.json, gitignored):
   "telegram_chat_ids":  [123456789]       # allowed user chat ids (whitelist)
 """
 
+import html
 import json
 import re
 import sys
@@ -111,16 +112,21 @@ class TelegramAPI:
         return self._call("getMe")
 
     def send_message(self, chat_id: int, text: str,
-                     reply_markup: dict | None = None) -> dict:
+                     reply_markup: dict | None = None,
+                     parse_mode: str | None = None) -> dict:
         """Send a text message to *chat_id*.
 
         *reply_markup* is an inline-keyboard dict; it is serialized to the
         JSON string the Bot API expects (omitted entirely when None).
+        *parse_mode* is the Bot API parse mode (e.g. "HTML"); omitted when
+        None so plain-text messages are unaffected.
         """
-        if reply_markup is None:
-            return self._call("sendMessage", chat_id=chat_id, text=text)
-        return self._call("sendMessage", chat_id=chat_id, text=text,
-                          reply_markup=json.dumps(reply_markup))
+        params = {"chat_id": chat_id, "text": text}
+        if reply_markup is not None:
+            params["reply_markup"] = json.dumps(reply_markup)
+        if parse_mode is not None:
+            params["parse_mode"] = parse_mode
+        return self._call("sendMessage", **params)
 
     def get_updates(self, offset: int | None = None, timeout: int = 50) -> list:
         """Long-poll for new updates (messages + callback queries)."""
@@ -339,10 +345,11 @@ class PadelBot:
             self._on_callback(u["callback_query"])
 
     def _send(self, chat_id: int, text: str,
-              reply_markup: dict | None = None) -> None:
+              reply_markup: dict | None = None,
+              parse_mode: str | None = None) -> None:
         """Send a message to *chat_id*; log failures instead of raising."""
         try:
-            self.api.send_message(chat_id, text, reply_markup)
+            self.api.send_message(chat_id, text, reply_markup, parse_mode)
         except TelegramError as e:
             _log(f"[telegram] send to {chat_id} failed: {e}")
 
@@ -523,13 +530,24 @@ class PadelBot:
         if not bookings:
             self._send(chat_id, "No upcoming bookings.")
             return
-        text = ("Your bookings:\n\n"
-                + "\n".join(f"{i + 1}. {_booking_info(b)}"
-                            for i, b in enumerate(bookings)))
-        rows = [[{"text": f"❌ Cancel #{i + 1}",
+        # Most-distant-future first; past bookings sink to the bottom.
+        bookings = sorted(bookings,
+                          key=lambda b: b["from_dt"] or datetime.min,
+                          reverse=True)
+        now = datetime.now()
+        lines = []
+        for i, b in enumerate(bookings, 1):
+            info = html.escape(_booking_info(b))
+            if b["from_dt"] is not None and b["from_dt"] < now:
+                lines.append(f"{i}. <s>{info}</s>")
+            else:
+                lines.append(f"{i}. {info}")
+        text = "Your bookings:\n\n" + "\n".join(lines)
+        rows = [[{"text": f"❌ Cancel #{i}",
                   "callback_data": f"cx:{b['details_id']}"}]
-                for i, b in enumerate(bookings) if is_cancellable(b)]
-        self._send(chat_id, text, {"inline_keyboard": rows} if rows else None)
+                for i, b in enumerate(bookings, 1) if is_cancellable(b)]
+        self._send(chat_id, text, {"inline_keyboard": rows} if rows else None,
+                   parse_mode="HTML")
 
     def _on_autobook(self, chat_id: int, args: list) -> None:
         if args:

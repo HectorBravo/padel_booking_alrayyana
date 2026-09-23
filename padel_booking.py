@@ -1329,12 +1329,19 @@ def keepalive(cfg: dict) -> requests.Session:
 
 def run_booking_race(cfg: dict, target: datetime, preferred: list,
                      wait_for_open: bool = True, timeout: int = 18000,
-                     dry_run: bool = False):
-    """Poll the slot endpoint (one request every 30s) and book the best
-    preferred slot as soon as it appears. Keeps trying until it succeeds or
-    `timeout` seconds elapse (default 5h). Returns (slot, all_slots,
-    response_or_None). With dry_run=True it identifies the slot but does NOT
-    submit the booking."""
+                     max_attempts: int = 1, dry_run: bool = False):
+    """Poll the slot endpoint and book the best preferred slot as soon as it
+    appears. Keeps trying until it succeeds, `max_attempts` is reached, or
+    `timeout` seconds elapse (whichever comes first).
+
+    By default ``max_attempts=1``: the bot checks once and stops immediately
+    if no preferred slot is available (instead of polling for hours). Increase
+    ``max_attempts`` to keep retrying (e.g. to catch a cancellation that frees
+    a slot), with each retry 30s apart.
+
+    Returns (slot, all_slots, response_or_None). With dry_run=True it
+    identifies the slot but does NOT submit the booking.
+    """
     open_hour = int(cfg.get("booking_open_hour", 0))
     now = datetime.now()
     open_dt = now.replace(hour=open_hour, minute=0, second=0, microsecond=0)
@@ -1356,7 +1363,7 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
     deadline = datetime.now() + timedelta(seconds=timeout)
     last_slots = []
     attempt = 0
-    while datetime.now() < deadline:
+    while datetime.now() < deadline and attempt < max_attempts:
         attempt += 1
         slots = get_available_slots(s, cfg, api_date, meta)
         last_slots = slots
@@ -1368,12 +1375,10 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
             r = submit_booking(s, cfg, meta, target.strftime("%Y-%m-%d"),
                                best, description)
             return best, slots, r
-        if attempt % 10 == 0:
-            print(f"[bot] still waiting for a preferred slot "
-                  f"({attempt} tries, "
-                  f"{int((deadline - datetime.now()).total_seconds())}s left)",
-                  flush=True)
-        time.sleep(30)
+        if attempt < max_attempts:
+            print(f"[bot] no preferred slot yet (attempt {attempt}/"
+                  f"{max_attempts}); retrying in 30s...", flush=True)
+            time.sleep(30)
     return None, last_slots, None
 
 
@@ -1541,12 +1546,12 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                     log(f"*** Booking {target:%a %d %b %Y} "
                         f"(prefs: {', '.join(preferred)}) "
                         f"{'[DRY RUN]' if dry_run else ''}... "
-                        f"(one request / 30s, up to 5h)")
+                        f"(one attempt; stops if no preferred slot)")
                     try:
                         best, slots, r = run_booking_race(
                             cfg, datetime.combine(target, datetime.min.time()),
                             preferred, wait_for_open=False, timeout=18000,
-                            dry_run=dry_run)
+                            max_attempts=1, dry_run=dry_run)
                         if best:
                             if dry_run:
                                 log(f"*** DRY RUN: would book {best['label']} "

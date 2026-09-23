@@ -155,10 +155,11 @@ python padel_booking.py telegram
 
 While it runs, the bot:
 
-- **Books your preferred slot automatically** — every day at midnight it checks
-  whether the newly opened date (`today + 6`) is one of the days in your `preferred_slots` map,
-  and if so books that day's first free `preferred_slots` entry (one request
-  every 30s, up to 5h).
+- **Books your preferred slot automatically** — every day it checks whether
+  the newly opened date (`today + 6`) is one of the days in your `preferred_slots`
+  map, and if so makes a single attempt to book that day's best free
+  `preferred_slots` entry. If none of your preferred slots are available it
+  stops (it does **not** keep polling for hours) and notifies you.
 - **Alerts you when the session expires** (keep-alive failure) — so you know
   before a booking attempt fails.
 - **Re-logs in automatically**: it requests a new OTP email itself, asks you

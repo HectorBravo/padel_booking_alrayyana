@@ -543,7 +543,7 @@ class PadelBot:
             else:
                 lines.append(f"{i}. {info}")
         text = "Your bookings:\n\n" + "\n".join(lines)
-        rows = [[{"text": f"❌ Cancel #{i}",
+        rows = [[{"text": f"❌ Cancel {b['from_dt']:%a %d %b %Y} {b['from_dt']:%H:%M} - {b['to_dt']:%H:%M}",
                   "callback_data": f"cx:{b['details_id']}"}]
                 for i, b in enumerate(bookings, 1) if is_cancellable(b)]
         self._send(chat_id, text, {"inline_keyboard": rows} if rows else None,

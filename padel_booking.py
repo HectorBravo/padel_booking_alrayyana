@@ -672,27 +672,6 @@ def _booking_error(r: requests.Response) -> str:
         return BeautifulSoup(m.group(1), "html.parser").get_text(" ", strip=True)
     return ""
 
-
-def booking_looks_successful(r: requests.Response) -> bool:
-    """Best-effort check of the booking POST response (NOT reliable on its own).
-
-    NOTE: the booking page always contains a static 'Thank you ... under
-    review' message, so its presence is NOT a valid success signal. A real
-    failure is usually signalled by a Bootstrap 'alert-danger' box (see
-    `_booking_error`).
-
-    IMPORTANT: the portal can also FAIL SILENTLY - it re-renders the page
-    with HTTP 200 and NO alert at all, yet creates no booking (this is what
-    happens with some early-morning slots). So this function is NOT a
-    reliable success signal on its own. Use `verify_booking_created()` to
-    confirm the booking actually landed in 'My Bookings' before reporting
-    success.
-    """
-    if r.status_code not in (200, 302, 303):
-        return False
-    return not _booking_error(r)
-
-
 # --------------------------------------------------------------------------- #
 # Booking memory (prevents double-booking after a daemon restart)
 # --------------------------------------------------------------------------- #

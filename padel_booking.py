@@ -1307,8 +1307,9 @@ def bookable_targets(targets: set, now: datetime, open_hour: int) -> list:
     for target_weekday in sorted(targets):
         # Find the next occurrence of this weekday
         days_ahead = (target_weekday - today.weekday() + 7) % 7
-        if days_ahead == 0:
-            days_ahead = 7  # next week's occurrence
+        # days_ahead == 0 means today itself is the target weekday.
+        # We keep it as 0 so candidate == today; the portal window check
+        # below will decide whether today's slots are available.
         candidate = today + timedelta(days=days_ahead)
 
         # Check if portal booking window has opened

@@ -1540,6 +1540,27 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                     "re-login failed. Send /login in the bot when you're "
                     "ready.")
             return False
+        # If the portal already holds an active booking for this day, tell the
+        # user and skip: the portal will not accept a second booking for the
+        # same day, so attempting one would only fail.
+        try:
+            _s = get_authenticated_session(cfg)
+            _bookings = fetch_my_bookings(_s)
+        except Exception:  # pylint: disable=broad-exception-caught
+            _bookings = []
+        _existing = next(
+            (b for b in _bookings
+             if b.get("from_dt") is not None
+             and b["from_dt"].date() == target
+             and not is_cancelled(b)),
+            None)
+        if _existing is not None:
+            _info = _booking_info(_existing)
+            log(f"*** {target:%a %d %b %Y} is already booked ({_info}); "
+                f"not booking another one.")
+            notify_(f"ℹ️ {target:%a %d %b} is already booked ({_info}). "
+                    f"I won't book another slot for that day.")
+            return True
         log(f"*** Booking {target:%a %d %b %Y} "
             f"(prefs: {', '.join(preferred)}) "
             f"{'[DRY RUN]' if dry_run else ''}...")

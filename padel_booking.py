@@ -1318,8 +1318,21 @@ def bookable_targets(targets: set, now: datetime, open_hour: int) -> list:
             datetime.min.time().replace(hour=open_hour))
         if now >= open_dt:
             result.append(candidate)
-    result.sort()
-    return result
+    # First priority: the bookable day whose window opened most recently.
+    # This gives the autobook a head start on the freshest slots.
+    # After that, remaining days are checked in chronological order.
+    result.sort()  # Sort chronologically first
+
+    if not result:
+        return result
+
+    # Find the day with the most recent open time
+    newest = max(result, key=lambda d: datetime.combine(
+        d - timedelta(days=6),
+        datetime.min.time().replace(hour=open_hour)))
+
+    others = [d for d in result if d != newest]
+    return [newest] + others
 
 
 def prefs_signature(cfg: dict) -> str:
@@ -1684,7 +1697,32 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                         and not already_booked_successfully(
                             new_day.strftime("%Y-%m-%d"))):
                     log(f"New booking window opened for "
-                        f"{new_day:%a %d %b %Y}. Booking it...")
+                        f"{new_day:%a %d %b %Y}. "
+                        f"Waiting for portal to sync...")
+                    # The portal opens slots at 00:00, but the remote server
+                    # time may not be synced.  Wait up to 10 minutes for the
+                    # portal to actually make the new day's slots available.
+                    api_date = (f"{new_day.day}-{new_day.month}-"
+                                f"{new_day.year}")
+                    for attempt in range(1, 61):
+                        time.sleep(10)
+                        try:
+                            _s = get_authenticated_session(cfg)
+                            _slots = get_available_slots(
+                                _s, cfg, api_date, None)
+                            if _slots:
+                                log(f"  Portal has slots for "
+                                    f"{new_day:%a %d %b} "
+                                    f"(attempt {attempt}). "
+                                    f"Proceeding...")
+                                break
+                        except Exception:  # pylint: disable=broad-exception-caught
+                            pass
+                        if attempt < 60:
+                            log(f"  Waiting for portal to open slots for "
+                                f"{new_day:%a %d %b} "
+                                f"(attempt {attempt}/60)...")
+                    log(f"Booking {new_day:%a %d %b %Y}...")
                     book_day(new_day, now)
                 last_open_date = now.date()
             # else: window not open yet - retry on the next pass.

@@ -1577,8 +1577,9 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
             _info = _booking_info(_existing)
             log(f"*** {target:%a %d %b %Y} is already booked ({_info}); "
                 f"not booking another one.")
-            notify_(f"ℹ️ {target:%a %d %b} is already booked ({_info}). "
-                    f"I won't book another slot for that day.")
+            notify_(f"ℹ️ {target:%a %d %b} is already booked for "
+                    f"{_existing['from_dt']:%H:%M} - "
+                    f"{_existing['to_dt']:%H:%M}")
             return True
         log(f"*** Booking {target:%a %d %b %Y} "
             f"(prefs: {', '.join(preferred)}) "

@@ -1290,29 +1290,34 @@ def preferred_slots_for_day(cfg: dict, day_name: str) -> list:
 
 
 def bookable_targets(targets: set, now: datetime, open_hour: int) -> list:
-    """All target days within the 6-day booking horizon that are currently
-    bookable (window open) and not yet booked successfully.
+    """For each target weekday, find the immediately closer (next)
+    occurrence and check whether the portal's booking window has opened.
 
-    The portal opens a day's slots at ``open_hour`` on the day that is 6 days
-    before it, so a day ``d`` is bookable once ``now`` is at/after that
-    moment (and only while ``d`` is still within the 6-day horizon). This
-    returns *every* such day (in date order), so the bot books all desired
-    days — including the one whose window just opened — instead of only the
-    nearest one. Returns a list of ``date`` (possibly empty).
+    The portal opens a day's slots at ``open_hour`` on the day that is 6
+    days before the target day.  A target day is bookable once ``now`` is
+    at/after that moment.  Returns the list of bookable target dates in
+    chronological order.
+
+    Note: we deliberately do **not** filter by ``already_booked_successfully``
+    here — that notification belongs in ``book_day()`` so the user sees a
+    consistent message for every desired day.
     """
     today = now.date()
     result = []
-    for offset in range(1, 7):  # portal opens up to 6 days ahead
-        day = today + timedelta(days=offset)
-        if day.weekday() not in targets:
-            continue
-        if already_booked_successfully(day.strftime("%Y-%m-%d")):
-            continue
+    for target_weekday in sorted(targets):
+        # Find the next occurrence of this weekday
+        days_ahead = (target_weekday - today.weekday() + 7) % 7
+        if days_ahead == 0:
+            days_ahead = 7  # next week's occurrence
+        candidate = today + timedelta(days=days_ahead)
+
+        # Check if portal booking window has opened
         open_dt = datetime.combine(
-            day - timedelta(days=6),
+            candidate - timedelta(days=6),
             datetime.min.time().replace(hour=open_hour))
         if now >= open_dt:
-            result.append(day)
+            result.append(candidate)
+    result.sort()
     return result
 
 

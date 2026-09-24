@@ -544,7 +544,7 @@ class PadelBot:
                 lines.append(f"{i}. {info}")
         text = "Your bookings:\n\n" + "\n".join(lines)
         rows = [[{"text": f"❌ Cancel {b['from_dt']:%a %d %b %Y} {b['from_dt']:%H:%M} - {b['to_dt']:%H:%M}",
-                  "callback_data": f"cx:{b['details_id']}"}]
+                  "callback_data": f"cx:{b['details_id']}|{b['from_dt']:%a %d %b %Y} {b['from_dt']:%H:%M}-{b['to_dt']:%H:%M}"}]
                 for i, b in enumerate(bookings, 1) if is_cancellable(b)]
         self._send(chat_id, text, {"inline_keyboard": rows} if rows else None,
                    parse_mode="HTML")
@@ -638,9 +638,13 @@ class PadelBot:
             self.pending.pop(chat_id, None)
             self._send(chat_id, "Aborted — nothing was booked.")
         elif data.startswith("cx:"):
+            parts = data[3:].split("|", 1)
+            cancel_id = parts[0]
+            formatted = parts[1] if len(parts) > 1 else ""
             self.pending[chat_id] = {"action": "confirm_cancel",
-                                     "cancel_id": data[3:]}
-            self._send(chat_id, "Cancel this booking?",
+                                     "cancel_id": cancel_id,
+                                     "formatted": formatted}
+            self._send(chat_id, f"Cancel {formatted}?",
                        {"inline_keyboard": [[
                            {"text": "✅ Yes, cancel",
                             "callback_data": "cxc:yes"},

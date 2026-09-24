@@ -961,9 +961,14 @@ class PadelBot:
             self._send(chat_id, f"⚠️ Could not save config: {e}")
             return
         self.pending.pop(chat_id, None)
-        days = ", ".join(d.capitalize() for d in slots) or "(none)"
+        day_parts = []
+        for d in slots:
+            times = ", ".join(
+                f"{t[:2]}:{t[3:]}-{int(t[:2])+1:02d}:{t[3:]}" for t in slots[d])
+            day_parts.append(f"{d.capitalize()} ({times})")
+        days_str = ", ".join(day_parts)
         self._send(chat_id,
-                   f"✅ Preferences saved.\nDays to book: {days}\n"
+                   f"✅ Preferences saved.\nDays to book: {days_str}\n"
                    f"The background autobooking will use these going forward.")
 
     def _prefs_cancel(self, chat_id: int) -> None:

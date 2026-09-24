@@ -1289,18 +1289,19 @@ def preferred_slots_for_day(cfg: dict, day_name: str) -> list:
     return list(slots)
 
 
-def next_bookable_target(targets: set, now: datetime, open_hour: int):
-    """Nearest upcoming target day that is currently bookable.
+def bookable_targets(targets: set, now: datetime, open_hour: int) -> list:
+    """All target days within the 6-day booking horizon that are currently
+    bookable (window open) and not yet booked successfully.
 
     The portal opens a day's slots at ``open_hour`` on the day that is 6 days
     before it, so a day ``d`` is bookable once ``now`` is at/after that
     moment (and only while ``d`` is still within the 6-day horizon). This
-    returns the *nearest* target day (within the horizon) that is not already
-    booked successfully and whose slots are open right now, so the bot both
-    races at the moment a day opens AND catches up on a day it missed while
-    it was not running. Returns a ``date`` or ``None``.
+    returns *every* such day (in date order), so the bot books all desired
+    days — including the one whose window just opened — instead of only the
+    nearest one. Returns a list of ``date`` (possibly empty).
     """
     today = now.date()
+    result = []
     for offset in range(1, 7):  # portal opens up to 6 days ahead
         day = today + timedelta(days=offset)
         if day.weekday() not in targets:
@@ -1311,8 +1312,18 @@ def next_bookable_target(targets: set, now: datetime, open_hour: int):
             day - timedelta(days=6),
             datetime.min.time().replace(hour=open_hour))
         if now >= open_dt:
-            return day
-    return None
+            result.append(day)
+    return result
+
+
+def prefs_signature(cfg: dict) -> str:
+    """A stable string identifying the current booking preferences, so the
+    loop can detect when /prefs (or a config.json edit) adds a new day or
+    time slot and react by (re)attempting those bookings."""
+    return json.dumps(
+        {"preferred_slots": cfg.get("preferred_slots"),
+         "target_weekdays": cfg.get("target_weekdays")},
+        sort_keys=True, default=str)
 
 
 def pick_best_slot(slots: list, preferred: list):
@@ -1450,8 +1461,16 @@ def cmd_telegram(cfg: dict, _args: list) -> None:
 
 def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                       dry_run: bool = False, stop_event=None) -> None:
-    """Resident autobooking loop: keep the session alive and book the target
-    day (today+6) as soon as its booking window opens.
+    """Resident autobooking loop: keep the session alive and book preferred
+    slots. It reacts to three events:
+
+      1. Program start  -> book ALL desired days whose window is already open
+         (catches up on days missed while the bot was not running, and books
+         the day whose window just opened, not only the nearest one).
+      2. Prefs change   -> when /prefs (or config.json) adds a new day or a new
+         time slot, (re)attempt every desired day that is bookable now.
+      3. New day opens  -> when a new calendar day starts and its window
+         (for today+6) opens at ``booking_open_hour``, book ONLY that new day.
 
     Shared by the standalone daemon and the Telegram bot (which runs it in a
     background thread so `python padel_booking.py telegram` also autobooks).
@@ -1495,9 +1514,72 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                 log("Re-login failed; will retry on the next pass.")
             return ok
 
+    def book_day(target, now) -> bool:
+        """Attempt to book the preferred slot for a single target day.
+
+        Returns True when a booking was submitted (or identified in dry-run),
+        False otherwise (no preferred slot, session invalid, or an error).
+        """
+        target_str = target.strftime("%Y-%m-%d")
+        preferred = preferred_slots_for_day(
+            cfg, WEEKDAY_NAME[target.weekday()])
+        if not preferred:
+            log(f"Window open but no preferred slots are configured for "
+                f"{target:%A}; skipping.")
+            return False
+        if not ensure_session():
+            log("*** SKIPPED booking: session invalid and re-login failed; "
+                "will retry on the next pass.")
+            notify_("❌ Booking skipped: session expired and automatic "
+                    "re-login failed. Send /login in the bot when you're "
+                    "ready.")
+            return False
+        log(f"*** Booking {target:%a %d %b %Y} "
+            f"(prefs: {', '.join(preferred)}) "
+            f"{'[DRY RUN]' if dry_run else ''}...")
+        try:
+            best, slots, r = run_booking_race(
+                cfg, datetime.combine(target, datetime.min.time()),
+                preferred, wait_for_open=False, timeout=18000,
+                max_attempts=1, dry_run=dry_run)
+            if best:
+                if dry_run:
+                    log(f"*** DRY RUN: would book {best['label']} "
+                        f"[{best['value']}] (no booking made).")
+                    return True
+                s = get_authenticated_session(cfg)
+                ok = (r is not None
+                      and verify_booking_created(s, target_str, best["start"]))
+                record_booking(target_str, best["label"], ok)
+                if ok:
+                    log(f"*** BOOKED {best['label']} [{best['value']}] "
+                        f"(confirmed in My Bookings)")
+                    notify_(f"✅ BOOKED {best['label']} for {target:%a %d %b} "
+                            f"(confirmed in My Bookings)")
+                    return True
+                err = (_booking_error(r) if r else "no response")
+                if not err:
+                    err = ("no response" if r is None
+                           else "not created; check My Bookings")
+                log(f"*** FAILED to book {best['label']} [{best['value']}]: "
+                    f"{err}")
+                notify_(f"❌ FAILED to book {best['label']} "
+                        f"for {target:%a %d %b}: {err}")
+                return False
+            log("*** FAILED: no preferred slot available "
+                f"({len(slots)} slots seen).")
+            notify_(f"❌ No preferred slot available for {target:%a %d %b} "
+                    f"({len(slots)} slots seen).")
+            return False
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            log(f"*** ERROR during booking: {e}")
+            notify_(f"❌ Booking error: {e}")
+            return False
+
     last_keepalive = time.time()
-    last_book_day = None      # day for which a booking race was started
-    last_skip_log_day = None  # day whose "skipping" reason was already logged
+    started = False           # whether the initial catch-up has been done
+    last_open_date = None     # day whose window-opening was last processed
+    last_prefs_sig = None     # last seen preferences signature
     targets = target_weekday_set(cfg)
     while not (stop_event is not None and stop_event.is_set()):
         now = datetime.now()
@@ -1524,75 +1606,55 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                     ensure_session()
             last_keepalive = time.time()
 
-        # --- booking: nearest target day within the horizon that is open ---
-        # Book the closest target day whose slots are already open and that
-        # we have not booked yet. This races at the moment a day opens AND
-        # catches up on a day the bot missed while it was not running.
-        if last_book_day != now.date():
-            target = next_bookable_target(targets, now, open_hour)
-            if target is not None:
-                target_str = target.strftime("%Y-%m-%d")
-                preferred = preferred_slots_for_day(
-                    cfg, WEEKDAY_NAME[target.weekday()])
-                if not preferred:
-                    if last_skip_log_day != now.date():
-                        last_skip_log_day = now.date()
-                        log(f"Window open but no preferred slots are "
-                            f"configured for {target:%A}; skipping.")
-                elif not ensure_session():
-                    log("*** SKIPPED booking: session invalid and re-login "
-                        "failed; will retry on the next pass.")
-                    notify_("❌ Booking skipped: session expired and "
-                            "automatic re-login failed. Send /login in the "
-                            "bot when you're ready.")
-                else:
-                    last_book_day = now.date()
-                    log(f"*** Booking {target:%a %d %b %Y} "
-                        f"(prefs: {', '.join(preferred)}) "
-                        f"{'[DRY RUN]' if dry_run else ''}... "
-                        f"(one attempt; stops if no preferred slot)")
-                    try:
-                        best, slots, r = run_booking_race(
-                            cfg, datetime.combine(target, datetime.min.time()),
-                            preferred, wait_for_open=False, timeout=18000,
-                            max_attempts=1, dry_run=dry_run)
-                        if best:
-                            if dry_run:
-                                log(f"*** DRY RUN: would book {best['label']} "
-                                    f"[{best['value']}] (no booking made).")
-                            else:
-                                s = get_authenticated_session(cfg)
-                                ok = (r is not None
-                                      and verify_booking_created(
-                                          s, target_str, best["start"]))
-                                record_booking(target_str, best["label"], ok)
-                                if ok:
-                                    log(f"*** BOOKED {best['label']} "
-                                        f"[{best['value']}] "
-                                        f"(confirmed in My Bookings)")
-                                    notify_(f"✅ BOOKED {best['label']} "
-                                            f"for {target:%a %d %b} "
-                                            f"(confirmed in My Bookings)")
-                                else:
-                                    err = (_booking_error(r) if r
-                                           else "no response")
-                                    if not err:
-                                        err = ("no response" if r is None
-                                               else "not created; check "
-                                                    "My Bookings")
-                                    log(f"*** FAILED to book {best['label']} "
-                                        f"[{best['value']}]: {err}")
-                                    notify_(f"❌ FAILED to book {best['label']} "
-                                            f"for {target:%a %d %b}: {err}")
-                        else:
-                            log("*** FAILED: no preferred slot available "
-                                f"({len(slots)} slots seen).")
-                            notify_(f"❌ No preferred slot available for "
-                                    f"{target:%a %d %b} ({len(slots)} slots "
-                                    f"seen).")
-                    except Exception as e:  # pylint: disable=broad-exception-caught
-                        log(f"*** ERROR during booking: {e}")
-                        notify_(f"❌ Booking error: {e}")
+        # --- booking -------------------------------------------------------
+        # Three triggers:
+        #   (1) Program start            -> book ALL desired (bookable) days.
+        #   (2) Prefs changed (a new day
+        #       or time slot added)      -> book ALL desired (bookable) days.
+        #   (3) A new day's window opens
+        #       (a new calendar day)     -> book ONLY that new day (today+6).
+        #
+        # ``last_open_date`` is only advanced once the window for (today+6)
+        # is actually open (``now >= open_dt``), so a day whose window opens
+        # later on the startup day is still picked up by trigger (3).
+        prefs_sig = prefs_signature(cfg)
+        open_dt = datetime.combine(
+            now.date(), datetime.min.time().replace(hour=open_hour))
+        window_open = now >= open_dt
+        if not started:
+            # (1) Program start: catch up on every desired day whose window
+            # is already open - including the one that just opened - instead
+            # of only the nearest day.
+            log("Startup: attempting to book all desired days...")
+            for target in bookable_targets(targets, now, open_hour):
+                book_day(target, now)
+            started = True
+            last_prefs_sig = prefs_sig
+            if window_open:
+                last_open_date = now.date()
+        elif prefs_sig != last_prefs_sig:
+            # (2) Preferences changed (e.g. /prefs added a day or a time
+            # slot): (re)attempt every desired day that is bookable now.
+            log("Preferences changed: attempting to book all desired days...")
+            for target in bookable_targets(targets, now, open_hour):
+                book_day(target, now)
+            last_prefs_sig = prefs_sig
+            if window_open:
+                last_open_date = now.date()
+        elif last_open_date is None or now.date() > last_open_date:
+            # (3) A new calendar day started (or today's window has not been
+            # processed yet): book ONLY the new day (today+6), once its
+            # window is open.
+            if window_open:
+                new_day = now.date() + timedelta(days=6)
+                if (new_day.weekday() in targets
+                        and not already_booked_successfully(
+                            new_day.strftime("%Y-%m-%d"))):
+                    log(f"New booking window opened for "
+                        f"{new_day:%a %d %b %Y}. Booking it...")
+                    book_day(new_day, now)
+                last_open_date = now.date()
+            # else: window not open yet - retry on the next pass.
 
         time.sleep(0.5)
 

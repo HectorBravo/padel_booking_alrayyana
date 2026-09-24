@@ -30,7 +30,7 @@ from padel_booking import (
     already_booked_successfully, fetch_my_bookings, cancel_booking,
     is_cancellable, is_cancelled, _booking_info, parse_date, to_api_date,
     preferred_slots_for_day, pick_best_slot, run_autobook_loop,
-    save_config, WEEKDAY_NAME,
+    save_config, WEEKDAY_NAME, ts_prefix,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -53,9 +53,9 @@ for _stream in (sys.stdout, sys.stderr):
 
 
 def _log(msg: str) -> None:
-    """Print a local log line; safe under pythonw (no console)."""
+    """Print a timestamped local log line; safe under pythonw (no console)."""
     if sys.stdout is not None:
-        print(msg, flush=True)
+        print(f"{ts_prefix()} {msg}", flush=True)
 
 
 # --------------------------------------------------------------------------- #

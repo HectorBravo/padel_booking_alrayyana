@@ -1342,6 +1342,12 @@ def keepalive(cfg: dict) -> requests.Session:
     return s
 
 
+def ts_prefix() -> str:
+    """Return the current local time as a log-line prefix, e.g.
+    ``[25/09/2026 01:12:23]`` (brackets included)."""
+    return datetime.now().strftime("[%d/%m/%Y %H:%M:%S]")
+
+
 def run_booking_race(cfg: dict, target: datetime, preferred: list,
                      wait_for_open: bool = True, timeout: int = 18000,
                      max_attempts: int = 1, dry_run: bool = False):
@@ -1391,8 +1397,8 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
                                best, description)
             return best, slots, r
         if attempt < max_attempts:
-            print(f"[bot] no preferred slot yet (attempt {attempt}/"
-                  f"{max_attempts}); retrying in 30s...", flush=True)
+            print(f"{ts_prefix()} [bot] no preferred slot yet (attempt "
+                  f"{attempt}/{max_attempts}); retrying in 30s...", flush=True)
             time.sleep(30)
     return None, last_slots, None
 
@@ -1456,7 +1462,7 @@ def cmd_telegram(cfg: dict, _args: list) -> None:
     except KeyboardInterrupt:
         # Ctrl+C before/while the poll worker is starting up (e.g. during
         # the initial getMe). run() handles the steady-state case itself.
-        print("\n[telegram] stopped.", flush=True)
+        print(f"\n{ts_prefix()} [telegram] stopped.", flush=True)
 
 
 def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,

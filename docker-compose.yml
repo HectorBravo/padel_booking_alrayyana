@@ -1,0 +1,31 @@
+services:
+  # Padel booking Telegram bot (autobooking included)
+  # Image is published to Docker Hub by the GitHub Actions workflow
+  # (.github/workflows/docker-publish.yml).
+  padel-bot:
+    image: hecbr/padel-booking-alrayyana:latest
+    pull_policy: always
+    container_name: padel-booking-bot
+    restart: unless-stopped
+    volumes:
+      # Only config.json is exposed to the host (so you can edit it directly).
+      # All other state (session.json, booked.json, telegram_state.json, ...)
+      # lives in the named volume 'padel-data' — it persists across restarts
+      # but stays out of your host filesystem.
+      # Create ./config.json (from config.sample.json) before first run.
+      - padel-data:/app
+      - ./config.json:/app/config.json
+    environment:
+      - TZ=UTC
+      # Run the app as YOUR host user so config.json is owned by you.
+      # Set these to your UID/GID (run `id`), e.g. uid=1000(you) gid=1000(you)
+      - PUID=1000
+      - PGID=1000
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  padel-data:

@@ -1,0 +1,2 @@
+# Keep shell scripts with LF line endings (CRLF breaks them in the Linux container)
+entrypoint.sh text eol=lf

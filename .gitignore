@@ -17,3 +17,9 @@ daemon.log
 __pycache__
 *.pyc
 .venv/
+
+# Docker data volume — runtime files (keep data/README.md tracked)
+data/*.json
+data/*.py
+data/*.log
+

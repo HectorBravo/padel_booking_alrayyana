@@ -1680,11 +1680,11 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                         f"{new_day:%a %d %b %Y}. "
                         f"Waiting for portal to sync...")
                     # The portal opens slots at 00:00, but the remote server
-                    # time may not be synced.  Wait up to 10 minutes for the
+                    # time may not be synced.  Wait up to 60 minutes for the
                     # portal to actually make the new day's slots available.
                     api_date = (f"{new_day.day}-{new_day.month}-"
                                 f"{new_day.year}")
-                    for attempt in range(1, 61):
+                    for attempt in range(1, 361):
                         time.sleep(10)
                         try:
                             _s = get_authenticated_session(cfg)
@@ -1698,10 +1698,10 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                                 break
                         except Exception:  # pylint: disable=broad-exception-caught
                             pass
-                        if attempt < 60:
+                        if attempt < 360:
                             log(f"  Waiting for portal to open slots for "
                                 f"{new_day:%a %d %b} "
-                                f"(attempt {attempt}/60)...")
+                                f"(attempt {attempt}/360)...")
                     log(f"Booking {new_day:%a %d %b %Y}...")
                     book_day(new_day, now)
                 last_open_date = now.date()

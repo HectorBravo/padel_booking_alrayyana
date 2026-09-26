@@ -40,6 +40,9 @@ STATE_FILE = HERE / "telegram_state.json"
 # Valid weekday names (lowercase) for the /prefs editor, e.g. "monday".."sunday".
 _DAY_NAMES = set(WEEKDAY_NAME.values())
 
+# Start hours offered by the /prefs day editor grid: 06:00-07:00 … 21:00-22:00.
+PREF_SLOT_HOURS = tuple(range(6, 22))
+
 # Windows consoles default to cp1252 and our Telegram texts contain emojis:
 # make console printing replace unencodable characters instead of crashing
 # (e.g. a daemon thread dying on a legacy console).
@@ -387,18 +390,6 @@ class PadelBot:
                 self._send(chat_id, "That doesn't look like the OTP code. "
                                     "Reply with the 6-digit code from your "
                                     "email (or /login to restart).")
-            return
-
-        # Pending /prefs "add slot" prompt: the next message is the slot time.
-        if self.pending.get(chat_id, {}).get("action") == "prefs_addslot":
-            st = self.pending.get(chat_id, {})
-            day_num = st.get("day")
-            if text.lower() in ("/prefs", "back", "cancel"):
-                st["action"] = "prefs"
-                st.pop("day", None)
-                self._render_prefs_menu(chat_id)
-            else:
-                self._prefs_add_slot(chat_id, day_num, text)
             return
 
         if not text.startswith("/"):
@@ -879,23 +870,36 @@ class PadelBot:
         if day_slots:
             lines.extend(f"  {i + 1}. {t}" for i, t in enumerate(day_slots))
         else:
-            lines.append("  (no slots yet — add one below)")
+            lines.append("  (no slots yet — tap a time below)")
         lines.append("")
-        lines.append("Tap a slot to remove it.")
+        lines.append("Tap a time to add it, or tap a ✅ time to remove it.")
         text = "\n".join(lines)
 
         enabled = name in slots
         rows = [[{"text": ("🔄 Disable " if enabled else "🔄 Enable ")
                           + name.capitalize(),
                   "callback_data": f"pf:toggle:{day_num}"}]]
-        for i in range(0, len(day_slots), 3):
-            chunk = day_slots[i:i + 3]
+        # All bookable hours (06:00-07:00 … 21:00-22:00) as tap-to-toggle
+        # buttons, 4 per row; ✅ marks the ones already selected.
+        for i in range(0, len(PREF_SLOT_HOURS), 4):
+            chunk = PREF_SLOT_HOURS[i:i + 4]
             rows.append([
-                {"text": f"❌ {t}", "callback_data": f"pf:rm:{day_num}:{i + j}"}
-                for j, t in enumerate(chunk)
+                {"text": ("✅ " if f"{h:02d}:00" in day_slots else "")
+                         + f"{h:02d}:00-{h + 1:02d}:00",
+                 "callback_data": f"pf:slot:{day_num}:{h}"}
+                for h in chunk
             ])
-        rows.append([{"text": "➕ Add slot",
-                      "callback_data": f"pf:add:{day_num}"}])
+        # Fallback: saved slots outside the 06:00–21:00 grid (e.g. "20:30")
+        # can still be removed with a ❌ button.
+        grid_times = {f"{h:02d}:00" for h in PREF_SLOT_HOURS}
+        extras = [t for t in day_slots if t not in grid_times]
+        for i in range(0, len(extras), 3):
+            chunk = extras[i:i + 3]
+            rows.append([
+                {"text": f"❌ {t}",
+                 "callback_data": f"pf:rm:{day_num}:{day_slots.index(t)}"}
+                for t in chunk
+            ])
         rows.append([{"text": "⬅ Back to days", "callback_data": "pf:back"}])
         self._send(chat_id, text, {"inline_keyboard": rows})
 
@@ -922,31 +926,17 @@ class PadelBot:
             day_slots.pop(idx)
         self._render_prefs_day(chat_id, day_num)
 
-    def _prefs_add_slot_prompt(self, chat_id: int, day_num: int) -> None:
-        st = self.pending[chat_id]
-        st["action"] = "prefs_addslot"
-        st["day"] = day_num
-        name = WEEKDAY_NAME[day_num].capitalize()
-        self._send(chat_id,
-                   f"Type the start time to add to {name} (e.g. 20:00), "
-                   f"or send /prefs to go back.")
-
-    def _prefs_add_slot(self, chat_id: int, day_num: int, time_str: str) -> None:
+    def _prefs_toggle_slot(self, chat_id: int, day_num: int, hour: int) -> None:
+        """Add or remove the `hour:00` slot for a day (tap-to-toggle)."""
         st = self.pending[chat_id]
         slots = st["slots"]
         name = WEEKDAY_NAME[day_num]
-        t = time_str.strip()
-        if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", t):
-            self._send(chat_id, "That doesn't look like a time "
-                                "(use HH:MM, e.g. 20:00).")
-            st["action"] = "prefs_addslot"
-            st["day"] = day_num
-            return
-        h, m = t.split(":")
-        t = f"{int(h):02d}:{m}"
+        t = f"{hour:02d}:00"
         if name not in slots:
             slots[name] = []
-        if t not in slots[name]:
+        if t in slots[name]:
+            slots[name].remove(t)
+        else:
             slots[name].append(t)
         st["action"] = "prefs_day"
         st["day"] = day_num
@@ -954,7 +944,7 @@ class PadelBot:
 
     def _prefs_save(self, chat_id: int) -> None:
         st = self.pending.get(chat_id, {})
-        if st.get("action") not in ("prefs", "prefs_day", "prefs_addslot"):
+        if st.get("action") not in ("prefs", "prefs_day"):
             self._send(chat_id, "No preferences flow in progress — send /prefs.")
             return
         slots = {d: s for d, s in st.get("slots", {}).items() if s}
@@ -965,14 +955,14 @@ class PadelBot:
             self._send(chat_id, f"⚠️ Could not save config: {e}")
             return
         self.pending.pop(chat_id, None)
-        day_parts = []
+        day_lines = []
         for d in slots:
             times = ", ".join(
                 f"{t[:2]}:{t[3:]}-{int(t[:2])+1:02d}:{t[3:]}" for t in slots[d])
-            day_parts.append(f"{d.capitalize()} ({times})")
-        days_str = ", ".join(day_parts)
+            day_lines.append(f"  {d.capitalize()} — {times}")
+        days_str = "\n".join(day_lines)
         self._send(chat_id,
-                   f"✅ Preferences saved.\nDays to book: {days_str}\n"
+                   f"✅ Preferences saved.\nDays to book:\n{days_str}\n"
                    f"The background autobooking will use these going forward.")
 
     def _prefs_cancel(self, chat_id: int) -> None:
@@ -984,7 +974,7 @@ class PadelBot:
         parts = data.split(":")
         action = parts[1]
         st = self.pending.get(chat_id, {})
-        if st.get("action") not in ("prefs", "prefs_day", "prefs_addslot"):
+        if st.get("action") not in ("prefs", "prefs_day"):
             self._send(chat_id, "No preferences flow in progress — send /prefs.")
             return
         try:
@@ -997,8 +987,8 @@ class PadelBot:
                 self._prefs_toggle_day(chat_id, int(parts[2]))
             elif action == "rm":
                 self._prefs_remove_slot(chat_id, int(parts[2]), int(parts[3]))
-            elif action == "add":
-                self._prefs_add_slot_prompt(chat_id, int(parts[2]))
+            elif action == "slot":
+                self._prefs_toggle_slot(chat_id, int(parts[2]), int(parts[3]))
             elif action == "back":
                 st["action"] = "prefs"
                 st.pop("day", None)

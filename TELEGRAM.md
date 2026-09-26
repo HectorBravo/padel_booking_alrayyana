@@ -134,8 +134,8 @@ Dates accept `YYYY-MM-DD`, `DD/MM/YYYY` or `DD-MM-YYYY`.
    slots (top = tried first) and shows a button for each day, plus
    **💾 Save** and **❌ Cancel**.
 2. **Tap a day** to open its editor. There you can:
-   - tap a slot to **remove** it,
-   - tap **➕ Add slot** and type a start time (`HH:MM`, e.g. `20:00`) to add one,
+   - tap any time in the grid (`06:00-07:00` … `21:00-22:00`) to **add** it,
+   - tap a ✅ time to **remove** it,
    - tap **🔄 Disable/Enable** to turn the day off/on (enabling starts it at `20:00`).
 3. Tap **⬅ Back to days** to keep editing other days, or **💾 Save** to write
    the result to `config.json` (as the per-day `preferred_slots` map) and apply

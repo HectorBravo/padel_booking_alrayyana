@@ -63,6 +63,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -187,6 +188,109 @@ def save_session(s: requests.Session) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Shared HTTP session (connection reuse across actions)
+# --------------------------------------------------------------------------- #
+_SESSION: "requests.Session | None" = None   # long-lived keep-alive session
+_SESSION_LOCK = threading.Lock()
+
+
+def get_session() -> requests.Session:
+    """Return the shared long-lived session, creating it on first use.
+
+    Reusing one session (and its keep-alive connection) across actions
+    avoids a fresh TLS/HTTP2 handshake + bot-detection round-trip on every
+    command, and keeps the browser fingerprint consistent. Thread-safe.
+    """
+    global _SESSION
+    with _SESSION_LOCK:
+        if _SESSION is None:
+            _SESSION = new_session()
+        return _SESSION
+
+
+def install_session(s: requests.Session) -> None:
+    """Make *s* the shared session (e.g. the fresh one from a completed
+    login), closing the previous one."""
+    global _SESSION
+    with _SESSION_LOCK:
+        if _SESSION is not None and _SESSION is not s:
+            try:
+                _SESSION.close()
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+        _SESSION = s
+
+
+def reset_session() -> None:
+    """Discard the shared session (e.g. after a validation failure)."""
+    global _SESSION
+    with _SESSION_LOCK:
+        if _SESSION is not None:
+            try:
+                _SESSION.close()
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+        _SESSION = None
+
+
+# --------------------------------------------------------------------------- #
+# HTTP timing (diagnostics) + booking-page meta cache
+# --------------------------------------------------------------------------- #
+_http_log = None  # callable(str) | None — set by the bot/loop/CLI
+
+
+def set_http_log(fn) -> None:
+    """Route per-request HTTP timing lines to *fn* (pass None to disable).
+
+    Every portal GET/POST goes through ``_timed`` below, so the logs show
+    exactly how long each request takes and whether the keep-alive connection
+    is being reused (a reused connection should be markedly faster than the
+    first request to a host).
+    """
+    global _http_log
+    _http_log = fn
+
+
+def _timed(method: str, url: str, call):
+    """Run *call()* (one HTTP request) and log its wall-clock duration."""
+    t0 = time.perf_counter()
+    try:
+        r = call()
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        dt = time.perf_counter() - t0
+        if _http_log:
+            _http_log(f"[http] {method} {url} FAILED after {dt:.2f}s: {e}")
+        raise
+    dt = time.perf_counter() - t0
+    status = getattr(r, "status_code", "?")
+    if _http_log:
+        _http_log(f"[http] {method} {url} -> {status} in {dt:.2f}s")
+    return r
+
+
+# The booking page's meta (unit_id / user_id / community_id / applicant_name /
+# status) is stable for the life of a session — only the *slots* change, and
+# those come from a separate POST. Caching the meta per session lets us skip
+# the second booking-page GET that every action used to make (a login-check
+# GET followed by a meta GET).
+_META_CACHE = None  # (session, monotonic_ts, meta) | None
+_META_TTL = 120     # seconds
+
+
+def _meta_cached(s):
+    """Return the cached meta for *s* if still fresh, else None."""
+    if (_META_CACHE is not None and _META_CACHE[0] is s
+            and (time.monotonic() - _META_CACHE[1]) < _META_TTL):
+        return _META_CACHE[2]
+    return None
+
+
+def _meta_store(s, meta) -> None:
+    global _META_CACHE
+    _META_CACHE = (s, time.monotonic(), meta)
+
+
+# --------------------------------------------------------------------------- #
 # Auth
 # --------------------------------------------------------------------------- #
 def encode(value: str) -> str:
@@ -305,17 +409,25 @@ def login_finish(cfg: dict, otp: str) -> requests.Session:
         raise RuntimeError("OTP accepted but session still not authenticated.")
 
     save_session(s)
+    install_session(s)
+    # A fresh login may be for a different account: reset the in-memory
+    # booking state so the next action re-reads it for the current account.
+    _STATE["meta"] = None
+    _STATE["bookings"] = []
     PENDING_FILE.unlink(missing_ok=True)
     print("  -> Login successful. Session saved to session.json")
     return s
 
 
 def get_authenticated_session(cfg: dict) -> requests.Session:
-    """Return a valid authenticated session, prompting to re-login if needed."""
-    s = new_session()
-    if is_logged_in(s, cfg):
-        save_session(s)
-        return s
+    """Return a valid authenticated session (shared, keep-alive), prompting
+    to re-login if needed."""
+    s = get_session()
+    with _SESSION_LOCK:
+        if is_logged_in(s, cfg):
+            save_session(s)
+            return s
+    reset_session()
     raise RuntimeError(
         "Session missing/expired. Run 'login-start' then 'login-finish <OTP>' "
         "to authenticate before using slots/book.")
@@ -339,23 +451,23 @@ def cmd_login_finish(cfg: dict, args: list) -> None:
 
 def cmd_login_status(cfg: dict) -> None:
     """CLI: report whether the saved session is still valid."""
-    s = new_session()
+    s = get_session()
     ok = is_logged_in(s, cfg)
     print("Session valid:", ok)
     if ok:
         save_session(s)
         print("Session refreshed/saved.")
     else:
+        reset_session()
         print("Run 'login-start' then 'login-finish <OTP>' to authenticate.")
 
 
 def cmd_explore(cfg: dict) -> None:
     """CLI: dump the authenticated booking page HTML for inspection."""
-    s = get_authenticated_session(cfg)
-    r = s.get(f"{BASE_URL}/asset/assetbooking/{cfg['asset_booking_id']}")
+    _s, html = get_booking_page(cfg)
     out = HERE / "booking_page.html"
-    out.write_text(r.text)
-    print(f"Booking page dumped to {out} ({len(r.text)} chars)")
+    out.write_text(html)
+    print(f"Booking page dumped to {out} ({len(html)} chars)")
 
 
 def to_api_date(d: str) -> str:
@@ -386,7 +498,7 @@ def to_form_date(d: str) -> str:
 def fetch_booking_page(s: requests.Session, cfg: dict) -> str:
     """Fetch the booking page HTML, raising if the session has expired."""
     r = s.get(f"{BASE_URL}/asset/assetbooking/{cfg['asset_booking_id']}")
-    if "/login" in r.url.lower():
+    if r.status_code != 200 or "/login" in r.url.lower():
         raise RuntimeError("Session expired. Re-login before booking.")
     return r.text
 
@@ -412,9 +524,149 @@ def parse_booking_meta(html: str) -> dict:
     return meta
 
 
-def get_available_slots(s: requests.Session, cfg: dict, api_date: str,
-                        meta: dict | None = None) -> list:
-    """Call the portal's slot endpoint and return the list of free slots."""
+def get_booking_page(cfg: dict) -> tuple:
+    """Fetch the booking page ONCE on the shared session (validates login).
+
+    Returns (session, html). The single fetch doubles as the login check:
+    ``fetch_booking_page`` raises RuntimeError when the session is expired.
+    """
+    s = get_session()
+    try:
+        html = fetch_booking_page(s, cfg)
+    except RuntimeError:
+        reset_session()
+        raise
+    with _SESSION_LOCK:
+        save_session(s)
+    return s, html
+
+
+# --------------------------------------------------------------------------- #
+# Session state (meta + bookings) — refreshed once at start / prefs-save
+#
+# The booking form's meta (unit_id, user_id, community_id, applicant_name,
+# status) is stable per account. The user's existing bookings are fetched
+# from the portal ONCE at program start or prefs-save (the single slow call,
+# ~4.5s), then held in memory for the whole session. This eliminates the
+# redundant booking-page GET and the slow mybookings call from every booking
+# attempt: after the initial refresh, all booking logic runs against the
+# in-memory state with no further mybookings calls.
+# --------------------------------------------------------------------------- #
+_STATE: dict = {"meta": None, "bookings": []}
+
+
+def _fetch_my_bookings_fast(s: requests.Session) -> list:
+    """Fetch the user's approved bookings via a bare POST (no prior GET).
+
+    Confirmed: the portal's mybookings endpoint accepts a POST with just
+    serach_val[id_service_req_status]=66 (Approved) and serach_val[page_num]=1
+    and returns the filtered result set. The prior GET (which discovers the
+    #searchForm fields) is unnecessary overhead (~5s).
+    """
+    data = {
+        "serach_val[id_service_req_status]": "66",  # Approved
+        "serach_val[page_num]": "1",
+    }
+    r = s.post(f"{BASE_URL}/booking/myBooking", data=data, allow_redirects=True)
+    if "/login" in r.url.lower():
+        raise RuntimeError("Session expired. Re-login before listing bookings.")
+    return _parse_booking_rows(r.text)
+
+
+def refresh_state(cfg: dict) -> None:
+    """Fetch the booking meta + the user's existing bookings from the portal.
+
+    This is the ONE slow call (booking-page GET ~1s + mybookings POST ~4.5s).
+    It is called at program start and on prefs-save. After this, all booking
+    logic runs against the in-memory state with no further mybookings calls.
+    """
+    s = get_session()
+    # 1. Fetch the booking meta (from the booking page).
+    try:
+        html = fetch_booking_page(s, cfg)
+        meta = parse_booking_meta(html)
+    except RuntimeError:
+        reset_session()
+        raise
+    with _SESSION_LOCK:
+        save_session(s)
+    _STATE["meta"] = meta
+    # 2. Fetch the user's existing bookings (bare POST, no GET).
+    bookings = _fetch_my_bookings_fast(s)
+    _STATE["bookings"] = bookings
+
+
+def get_booking_meta(cfg: dict) -> tuple:
+    """Return (session, meta), fetching the meta if not yet in memory.
+
+    The meta is stable per account, so it is fetched from the booking page
+    only on the first call (or after a re-login). This removes the redundant
+    booking-page GET from every slots/book/mybookings action.
+    """
+    if _STATE["meta"] is not None:
+        return get_session(), _STATE["meta"]
+    s = get_session()
+    try:
+        html = fetch_booking_page(s, cfg)
+        meta = parse_booking_meta(html)
+    except RuntimeError:
+        reset_session()
+        raise
+    with _SESSION_LOCK:
+        save_session(s)
+    _STATE["meta"] = meta
+    return s, meta
+
+
+def get_bookings() -> list:
+    """Return the in-memory list of the user's existing bookings."""
+    return _STATE["bookings"]
+
+
+def is_day_booked(target_date) -> bool:
+    """True if the user already has an approved (non-cancelled) booking for
+    *target_date* (a ``datetime.date``)."""
+    for b in _STATE["bookings"]:
+        if b.get("from_dt") is None:
+            continue
+        if b["from_dt"].date() == target_date and not is_cancelled(b):
+            return True
+    return False
+
+
+def count_active_bookings(target_date) -> int:
+    """Count the user's active (non-cancelled) bookings within the current
+    7-day booking window (today through today+6).
+
+    The portal allows a maximum of 3 active bookings within the 7-day
+    booking window. Bookings outside that window (past or beyond 7 days)
+    do not count toward the limit.
+    """
+    today = datetime.now().date()
+    window_start = today
+    window_end = today + timedelta(days=6)
+    count = 0
+    for b in _STATE["bookings"]:
+        if b.get("from_dt") is None or is_cancelled(b):
+            continue
+        d = b["from_dt"].date()
+        if window_start <= d <= window_end:
+            count += 1
+    return count
+
+
+MAX_TOTAL_BOOKINGS = 3  # portal limit: max 3 active bookings per 7-day window
+
+
+def _slots_endpoint(s: requests.Session, cfg: dict, api_date: str,
+                    meta: dict | None = None) -> tuple[list, str]:
+    """Call the portal's slot endpoint. Returns (slots, error_text).
+
+    *slots* is the list of free slots (empty when the day is already booked
+    or has no free slots). *error_text* is the text of the 'alert-danger'
+    box the portal returns when a day is already booked (e.g. '...this
+    amenity can only be booked once a day'), or '' when absent.
+    """
     meta = meta or {}
     serach_val = {
         "date": api_date,
@@ -449,7 +701,14 @@ def get_available_slots(s: requests.Session, cfg: dict, api_date: str,
             "end": end,
             "slot_id": parts[-1] if parts else None,
         })
-    return slots
+    error = _alert_text(r, "danger")
+    return slots, error
+
+
+def get_available_slots(s: requests.Session, cfg: dict, api_date: str,
+                        meta: dict | None = None) -> list:
+    """Call the portal's slot endpoint and return the list of free slots."""
+    return _slots_endpoint(s, cfg, api_date, meta)[0]
 
 
 def parse_from_filter(args: list):
@@ -528,9 +787,7 @@ def cmd_slots(cfg: dict, args: list) -> None:
     if not args:
         sys.exit("Usage: slots <date> [--from HH:MM]   (e.g. slots 2026-09-26 --from 18:00)")
     api_date = to_api_date(args[0])
-    s = get_authenticated_session(cfg)
-    html = fetch_booking_page(s, cfg)
-    meta = parse_booking_meta(html)
+    s, meta = get_booking_meta(cfg)
     all_slots = get_available_slots(s, cfg, api_date, meta)
     slots = filter_slots_from(all_slots, min_start)
     print(f"\nAvailable slots for {args[0]}  (unit {meta.get('unit_label')}, "
@@ -566,9 +823,7 @@ def cmd_book(cfg: dict, args: list) -> None:
     description = args[2] if len(args) > 2 else cfg.get("description",
                                                         "Padel booking")
 
-    s = get_authenticated_session(cfg)
-    html = fetch_booking_page(s, cfg)
-    meta = parse_booking_meta(html)
+    s, meta = get_booking_meta(cfg)
     slots = get_available_slots(s, cfg, api_date, meta)
     if not slots:
         sys.exit("No slots available for that date.")
@@ -658,6 +913,54 @@ def submit_booking(s: requests.Session, cfg: dict, meta: dict, date_str: str,
         out.chmod(0o600)
         print(f"[diag] response body saved -> {out} ({len(r.text)} chars)")
     return r
+
+
+def submit_booking_fast(s: requests.Session, cfg: dict, meta: dict,
+                        date_str: str, slot: dict,
+                        description: str = "Padel booking") -> int:
+    """POST the booking form WITHOUT waiting for the full HTML response.
+
+    The portal generates the 'My Bookings' HTML page (~4-5s) before sending
+    the response body. We only need the status code to know the request was
+    accepted. Verification is done separately via the slots endpoint.
+
+    Returns the HTTP status code (200 = accepted, 302 = redirect).
+    """
+    payload = {
+        "status": meta.get("status", "66"),
+        "is_paid_var": "N",
+        "id_community_asset": cfg["asset_booking_id"],
+        "id_community": meta.get("community_id", ""),
+        "id_unit": meta.get("unit_id", ""),
+        "applicant_name": meta.get("applicant_name", ""),
+        "attendees": str(cfg.get("attendees", 1)),
+        "check_in_date": to_form_date(date_str),
+        "check_in_time": slot["value"],
+        "description": description,
+        "tnc_assest": "on",
+        "submit": "submit",
+    }
+    r = s.post(f"{BASE_URL}/asset/assetbooking/{cfg['asset_booking_id']}",
+               data=payload, allow_redirects=False, stream=True)
+    status = r.status_code
+    r.close()  # discard the body — we verify via slots endpoint instead
+    return status
+
+
+def cancel_booking_fast(s: requests.Session, details_id: str) -> tuple[bool, int]:
+    """Cancel a booking WITHOUT waiting for the full HTML response.
+
+    Returns (ok, status_code). Verification is done via the slots endpoint.
+    """
+    r = s.post(CANCEL_URL, data={
+        "id_asset_booking": details_id,
+        "booking_cancel_value": "1",
+        "submit": "submit",
+    }, allow_redirects=False, stream=True)
+    status = r.status_code
+    r.close()
+    ok = status in (200, 302, 303)
+    return ok, status
 
 
 def _booking_error(r: requests.Response) -> str:
@@ -895,11 +1198,12 @@ def verify_booking_created(s: requests.Session, date_str: str,
     except ValueError:
         return False
     try:
-        # Deliberately UNfiltered: this is the ground-truth success check, so
-        # we must find the booking regardless of its exact status (a new
-        # booking could briefly be in a non-'Approved' state). A false
-        # negative here would make the bot re-book an already-made booking.
-        bookings = fetch_my_bookings(s)
+        # Approved-only (id_service_req_status=66): a booking we just made is
+        # 'Approved', and the filter keeps this to a single page (~4.5s)
+        # instead of the multi-page unfiltered fetch (~15s). This is only the
+        # slow fallback -- the fast path is the slots endpoint's 'booked once
+        # a day' alert checked by the caller.
+        bookings = fetch_my_bookings(s, status="Approved")
     except Exception:  # pylint: disable=broad-exception-caught
         return False
     for b in bookings:
@@ -1134,9 +1438,7 @@ def cmd_pick(cfg: dict, args: list) -> None:
     """
     verbose, args = pop_flag(args, "--verbose")
     min_start, args = resolve_min_start(cfg, args)
-    s = get_authenticated_session(cfg)
-    html = fetch_booking_page(s, cfg)
-    meta = parse_booking_meta(html)
+    s, meta = get_booking_meta(cfg)
 
     today = datetime.now().date()
     last = today + timedelta(days=6)
@@ -1365,10 +1667,9 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
     now = datetime.now()
     open_dt = now.replace(hour=open_hour, minute=0, second=0, microsecond=0)
 
-    # Pre-warm the session + booking page (lowers the booking latency).
-    s = keepalive(cfg)
-    html = fetch_booking_page(s, cfg)
-    meta = parse_booking_meta(html)
+    # Pre-warm the shared session + booking page (lowers the booking
+    # latency): one fetch that also validates the session.
+    s, meta = get_booking_meta(cfg)
 
     # If this is the day the target opens and we are before the open time,
     # wait until a couple of seconds before it, then start polling.
@@ -1391,9 +1692,10 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
             if dry_run:
                 return best, slots, None
             description = cfg.get("description", "Padel booking")
-            r = submit_booking(s, cfg, meta, target.strftime("%Y-%m-%d"),
-                               best, description)
-            return best, slots, r
+            status = submit_booking_fast(s, cfg, meta,
+                                         target.strftime("%Y-%m-%d"),
+                                         best, description)
+            return best, slots, status
         if attempt < max_attempts:
             print(f"{ts_prefix()} [bot] no preferred slot yet (attempt "
                   f"{attempt}/{max_attempts}); retrying in 30s...", flush=True)
@@ -1437,13 +1739,12 @@ def cmd_autobook(cfg: dict, args: list) -> None:
     ok = verify_booking_created(s, target_str, best["start"])
     record_booking(target_str, best["label"], ok)
     if r is not None:
-        print("Response status:", r.status_code, "final url:", r.url)
+        print("Response status:", r)
     if ok:
         print("Booking CONFIRMED - it now appears in your 'My Bookings'.")
     else:
-        err = _booking_error(r) if r is not None else ""
-        print(f"Booking FAILED: {err or 'the portal did not create the booking '
-              '(no error message, and it is not in My Bookings)'}")
+        print(f"Booking FAILED: the portal did not create the booking "
+              f"(HTTP {r})")
 
 
 def cmd_keepalive(cfg: dict, _args: list) -> None:
@@ -1538,61 +1839,105 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                     "re-login failed. Send /login in the bot when you're "
                     "ready.")
             return False
-        # If the portal already holds an active booking for this day, tell the
-        # user and skip: the portal will not accept a second booking for the
-        # same day, so attempting one would only fail.
-        try:
-            _s = get_authenticated_session(cfg)
-            _bookings = fetch_my_bookings(_s)
-        except Exception:  # pylint: disable=broad-exception-caught
-            _bookings = []
-        _existing = next(
-            (b for b in _bookings
-             if b.get("from_dt") is not None
-             and b["from_dt"].date() == target
-             and not is_cancelled(b)),
-            None)
-        if _existing is not None:
-            _info = _booking_info(_existing)
-            log(f"*** {target:%a %d %b %Y} is already booked ({_info}); "
-                f"not booking another one.")
-            notify_(f"ℹ️ {target:%a %d %b} is already booked "
-                    f"({_existing['from_dt']:%H:%M}-"
-                    f"{_existing['to_dt']:%H:%M})")
+        # Fast path (no network): if we already booked this day successfully
+        # (local memory), skip entirely.
+        if already_booked_successfully(target_str):
+            log(f"*** {target:%a %d %b %Y} is already booked (per booked.json); "
+                f"skipping.")
+            notify_(f"ℹ️ {target:%a %d %b} is already booked.")
+            return True
+        # Fast path (no network): if the user already has a booking for this
+        # day (per the in-memory My Bookings list, refreshed once at
+        # start/prefs-save), skip entirely — no slots endpoint call needed.
+        if is_day_booked(target):
+            log(f"*** {target:%a %d %b %Y} is already booked (per My Bookings); "
+                f"skipping.")
+            notify_(f"ℹ️ {target:%a %d %b} is already booked.")
+            return True
+        # Fast path (no network): the portal allows max 3 active bookings
+        # within the 7-day booking window. If we already have 3, the slots
+        # endpoint will return 0 slots for ANY day in that window — skip.
+        active_count = count_active_bookings(target)
+        if active_count >= MAX_TOTAL_BOOKINGS:
+            log(f"*** {target:%a %d %b %Y}: booking limit reached "
+                f"({active_count}/{MAX_TOTAL_BOOKINGS} in 7-day window); "
+                f"skipping.")
+            notify_(f"ℹ️ {target:%a %d %b}: max "
+                    f"{MAX_TOTAL_BOOKINGS} bookings in this window.")
             return True
         log(f"*** Booking {target:%a %d %b %Y} "
             f"(prefs: {', '.join(preferred)}) "
             f"{'[DRY RUN]' if dry_run else ''}...")
+        t0 = time.time()
         try:
             best, slots, r = run_booking_race(
                 cfg, datetime.combine(target, datetime.min.time()),
                 preferred, wait_for_open=False, timeout=18000,
                 max_attempts=1, dry_run=dry_run)
+            t_race = time.time() - t0
             if best:
                 if dry_run:
                     log(f"*** DRY RUN: would book {best['label']} "
-                        f"[{best['value']}] (no booking made).")
+                        f"[{best['value']}] (no booking made). "
+                        f"[race: {t_race:.2f}s]")
                     return True
-                s = get_authenticated_session(cfg)
-                ok = (r is not None
-                      and verify_booking_created(s, target_str, best["start"]))
+                # Verify via the slots endpoint (~0.3s): if the booking
+                # succeeded, the day now has 0 free slots. This replaces the
+                # slow mybookings round-trip entirely.
+                s = get_session()
+                meta = get_booking_meta(cfg)[1]
+                api_date = f"{target.day}-{target.month}-{target.year}"
+                verify_slots, _ = _slots_endpoint(s, cfg, api_date, meta)
+                t_verify = time.time() - t0
+                ok = len(verify_slots) == 0
                 record_booking(target_str, best["label"], ok)
+                timing = (f"[race: {t_race:.2f}s | "
+                          f"verify: {t_verify - t_race:.2f}s | "
+                          f"total: {t_verify:.2f}s]")
                 if ok:
                     log(f"*** BOOKED {best['label']} [{best['value']}] "
-                        f"(confirmed in My Bookings)")
-                    notify_(f"✅ BOOKED {best['label']} for {target:%a %d %b} "
-                            f"(confirmed in My Bookings)")
+                        f"(confirmed: 0 slots remaining) {timing}")
+                    notify_(f"✅ BOOKED: {target:%a %d %b} {best['label']}")
+                    # Refresh the in-memory bookings list so /mybookings
+                    # shows the new slot and count_active_bookings is
+                    # accurate for the next attempt.
+                    try:
+                        refresh_state(cfg)
+                        log("Bookings cache refreshed after autobook.")
+                    except Exception as e2:  # pylint: disable=broad-exception-caught
+                        log(f"Cache refresh after autobook failed (non-fatal): {e2}")
                     return True
-                err = (_booking_error(r) if r else "no response")
-                if not err:
-                    err = ("no response" if r is None
-                           else "not created; check My Bookings")
+                err = (f"booking not confirmed (slots still available, "
+                       f"HTTP {r})" if r else
+                       "booking not confirmed (slots still available)")
                 log(f"*** FAILED to book {best['label']} [{best['value']}]: "
-                    f"{err}")
-                notify_(f"❌ FAILED to book {best['label']} "
-                        f"for {target:%a %d %b}: {err}")
+                    f"{err} {timing}")
+                notify_(f"❌ Booking FAILED for {target:%a %d %b %Y} "
+                        f"{best['label']}.\n{err}")
                 return False
-            log("*** FAILED: no preferred slot available "
+            # No preferred slot was available. The day is fully booked by
+            # someone else (0 slots + no existing booking of ours = slot
+            # taken).
+            # Safety net: if the in-memory bookings list is empty/stale, do
+            # a one-time mybookings check to see if we actually already have
+            # a booking for this day.
+            if len(slots) == 0 and not _STATE["bookings"]:
+                log(f"*** WARNING: 0 slots but in-memory bookings list is "
+                    f"empty — doing one-time mybookings check...")
+                try:
+                    s_chk = get_session()
+                    fresh = _fetch_my_bookings_fast(s_chk)
+                    _STATE["bookings"] = fresh
+                    log(f"*** Refreshed bookings list: {len(fresh)} "
+                        f"booking(s).")
+                    if is_day_booked(target):
+                        log(f"*** {target:%a %d %b %Y} IS already booked "
+                            f"(confirmed via mybookings).")
+                        notify_(f"ℹ️ {target:%a %d %b} is already booked.")
+                        return True
+                except Exception as e2:  # pylint: disable=broad-exception-caught
+                    log(f"*** mybookings safety-net check failed: {e2}")
+            log(f"*** FAILED: no preferred slot available "
                 f"({len(slots)} slots seen).")
             notify_(f"❌ No preferred slot available for {target:%a %d %b} "
                     f"({len(slots)} slots seen).")
@@ -1607,6 +1952,20 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
     last_open_date = None     # day whose window-opening was last processed
     last_prefs_sig = None     # last seen preferences signature
     targets = target_weekday_set(cfg)
+
+    # --- initial state refresh (the ONE slow call) -------------------------
+    # Fetch the booking meta + the user's existing bookings from the portal.
+    # This is the single slow call (~5.5s) that is done ONCE at program start.
+    # After this, all booking logic runs against the in-memory state with no
+    # further mybookings calls.
+    try:
+        refresh_state(cfg)
+        log(f"State refreshed: {len(_STATE['bookings'])} existing bookings "
+            f"loaded.")
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        log(f"WARNING: initial state refresh failed: {e}. "
+            f"Booking will still work, but 'already booked' checks will "
+            f"fall back to the slots endpoint.")
     while not (stop_event is not None and stop_event.is_set()):
         now = datetime.now()
 
@@ -1660,8 +2019,13 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                 last_open_date = now.date()
         elif prefs_sig != last_prefs_sig:
             # (2) Preferences changed (e.g. /prefs added a day or a time
-            # slot): (re)attempt every desired day that is bookable now.
-            log("Preferences changed: attempting to book all desired days...")
+            # slot): refresh the in-memory state (the ONE slow call), then
+            # (re)attempt every desired day that is bookable now.
+            log("Preferences changed: refreshing state and booking...")
+            try:
+                refresh_state(cfg)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                log(f"WARNING: state refresh after prefs change failed: {e}.")
             for target in bookable_targets(targets, now, open_hour):
                 book_day(target, now)
             last_prefs_sig = prefs_sig
@@ -1685,7 +2049,6 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                     api_date = (f"{new_day.day}-{new_day.month}-"
                                 f"{new_day.year}")
                     for attempt in range(1, 361):
-                        time.sleep(10)
                         try:
                             _s = get_authenticated_session(cfg)
                             _slots = get_available_slots(
@@ -1702,6 +2065,7 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                             log(f"  Waiting for portal to open slots for "
                                 f"{new_day:%a %d %b} "
                                 f"(attempt {attempt}/360)...")
+                            time.sleep(10)
                     log(f"Booking {new_day:%a %d %b %Y}...")
                     book_day(new_day, now)
                 last_open_date = now.date()

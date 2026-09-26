@@ -168,6 +168,10 @@ While it runs, the bot:
   your phone.
 - **Notifies you of every booking result** — ✅ BOOKED, or ❌ FAILED with the
   portal's error.
+- **Respects the booking limit** — the portal caps you at 3 active bookings
+  in the 7-day window. The bot checks this before attempting and skips if
+  the limit is reached (you'll see an ℹ️ notification). Cancelling a booking
+  immediately frees a slot.
 
 Pause the autobooking with **`/stopautobook`** and resume it with
 **`/startautobook`** (e.g. while you're re-booking manually).

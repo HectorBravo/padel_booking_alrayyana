@@ -13,13 +13,28 @@ Automates booking the Al Rayyana community padel court on the Asteco portal
 - **Slots** are fetched from the portal's `ajaxctrl/getAmenityBookingSlot`
   endpoint (the same call the web UI makes when you pick a date).
 - **Booking** posts the booking form (`#form_submit`) with your unit,
-  attendees, date, chosen slot and the T&C acceptance.
+  attendees, date, chosen slot and the T&C acceptance. Uses
+  `stream=True` + `allow_redirects=False` to discard the server's
+  ~5s HTML response body — the portal processes the booking in <1s and
+  immediately sends a 303 redirect, so the client captures the status
+  code in ~0.6s and moves on.
 - **My bookings / cancel** read the portal's `My Bookings` page
   (`/booking/myBooking`). Each row links to a booking-details id
   (`/booking/bookingDetails/<id>`); cancelling is a plain POST to
   `/booking/cancelAmenityBooking` with that id (the on-page confirm popup is
   client-side only). A booking can be cancelled while its start time is still
-  in the future; the portal then marks it `Reject`.
+  in the future; the portal then marks it `Reject`. Cancel also uses the
+  `stream=True` technique (~0.4s).
+- **In-memory state** — after a one-time `refresh_state()` call (at startup
+  and after each booking/cancel), the bot keeps the booking metadata and the
+  user's bookings list in memory (`_STATE`). All subsequent checks (already
+  booked?, booking limit?) run against this cache with zero extra network
+  calls. The cache is refreshed from the portal after every successful
+  booking or cancellation so `/mybookings` always shows current data.
+- **Booking limit** — the portal allows a maximum of **3 active (non-cancelled)
+  bookings** within the 7-day bookable window (today through today+6). The
+  bot enforces this locally: if you already hold 3 bookings in the window,
+  further booking attempts are skipped without hitting the portal.
 
 ## Files
 | File               | Purpose                                              | Protected |
@@ -207,6 +222,10 @@ python3 padel_booking.py autobook 2026-09-27 --dry-run
 - The bot books **at/after** midnight (within the 5h race window), so if it
   was briefly down it will still catch up the same night (while the slot is
   still free).
+- **Booking limit.** The portal caps you at **3 active bookings** in the
+  7-day window. The bot checks this locally before attempting a booking and
+  skips if the limit is reached. Cancelling a booking immediately frees a
+  slot in the window (the cache is refreshed right after).
 
 ## Telegram bot
 

@@ -24,13 +24,16 @@ from pathlib import Path
 from curl_cffi import requests  # already a project dependency (no new packages)
 
 from padel_booking import (
-    login_start, login_finish, get_authenticated_session, new_session,
-    is_logged_in, fetch_booking_page, parse_booking_meta, get_available_slots,
-    submit_booking, verify_booking_created, record_booking,
-    already_booked_successfully, fetch_my_bookings, cancel_booking,
-    is_cancellable, is_cancelled, _booking_info, parse_date, to_api_date,
-    preferred_slots_for_day, pick_best_slot, run_autobook_loop,
-    save_config, WEEKDAY_NAME, ts_prefix,
+    login_start, login_finish, get_authenticated_session, get_session,
+    reset_session, save_session, is_logged_in, get_booking_meta,
+    get_available_slots, submit_booking, submit_booking_fast,
+    verify_booking_created,
+    record_booking, already_booked_successfully, fetch_my_bookings,
+    cancel_booking, cancel_booking_fast, is_cancellable, is_cancelled,
+    _booking_info, parse_date,
+    to_api_date, preferred_slots_for_day, pick_best_slot, run_autobook_loop,
+    save_config, WEEKDAY_NAME, ts_prefix, refresh_state,
+    _slots_endpoint, get_bookings,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -282,9 +285,26 @@ class PadelBot:
         # pushes Telegram notifications (booked / failed / OTP expiry).
         # It can be toggled at runtime with /startautobook & /stopautobook.
         self._start_autobook()
-        self._notify("🤖 Padel bot started — autobooking is active.\n"
-                     "I'll book your preferred slot automatically when the "
-                     "window opens and let you know right here.")
+        # Build a startup message that includes the preferred slots,
+        # similar to the /prefs save confirmation.
+        prefs = self.cfg.get("preferred_slots", {})
+        if prefs:
+            day_lines = []
+            for d in sorted(prefs):
+                times = ", ".join(
+                    f"{t[:2]}:{t[3:]}-{int(t[:2])+1:02d}:{t[3:]}"
+                    for t in prefs[d])
+                day_lines.append(f"  {d.capitalize()} — {times}")
+            prefs_str = "\n".join(day_lines)
+            self._notify(
+                "🤖 Padel bot started — autobooking is active.\n"
+                f"Days to book:\n{prefs_str}\n"
+                "I'll book your preferred slot automatically when the "
+                "window opens and let you know right here.")
+        else:
+            self._notify(
+                "🤖 Padel bot started — autobooking is active.\n"
+                "No preferred slots configured yet — send /prefs to set them.")
         worker = threading.Thread(target=self._poll_loop, daemon=True)
         worker.start()
         try:
@@ -434,11 +454,13 @@ class PadelBot:
                             "the login.")
 
     def _on_status(self, chat_id: int) -> None:
-        s = new_session()
+        s = get_session()
         ok = is_logged_in(s, self.cfg)
         if ok:
+            save_session(s)
             self._send(chat_id, "✅ Logged in — session is valid.")
         else:
+            reset_session()
             self._send(chat_id, "❌ Not logged in (or session expired).\n"
                                 "Send /login to start a fresh login.")
 
@@ -479,9 +501,7 @@ class PadelBot:
 
     def _show_slots(self, chat_id: int, date: datetime) -> None:
         try:
-            s = get_authenticated_session(self.cfg)
-            html = fetch_booking_page(s, self.cfg)
-            meta = parse_booking_meta(html)
+            s, meta = get_booking_meta(self.cfg)
             slots = get_available_slots(s, self.cfg,
                                         to_api_date(date.strftime("%Y-%m-%d")),
                                         meta)
@@ -505,18 +525,18 @@ class PadelBot:
         self._show_date_keyboard(chat_id, "Pick a date to book:")
 
     def _on_mybookings(self, chat_id: int) -> None:
-        try:
-            s = get_authenticated_session(self.cfg)
-            # Ask the portal for Approved bookings only (server-side filter),
-            # so we fetch far fewer rows/pages. The client-side filter below
-            # stays as a safety net.
-            bookings = fetch_my_bookings(s, status="Approved")
-        except RuntimeError as e:
-            self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
-                                f"login.")
-            return
-        # Only show live bookings — hide cancelled/rejected ones (so every
-        # entry here is already approved; no need to show the status tag).
+        t0 = time.time()
+        # Use the in-memory bookings list (refreshed at startup / prefs-save).
+        # If it's empty, do a one-time refresh.
+        bookings = get_bookings()
+        if not bookings:
+            try:
+                refresh_state(self.cfg)
+                bookings = get_bookings()
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+        t_fetch = time.time() - t0
+        # Only show live bookings — hide cancelled/rejected ones.
         bookings = [b for b in bookings if not is_cancelled(b)]
         if not bookings:
             self._send(chat_id, "No upcoming bookings.")
@@ -556,9 +576,7 @@ class PadelBot:
                                 f"again.")
             return
         try:
-            s = get_authenticated_session(self.cfg)
-            html = fetch_booking_page(s, self.cfg)
-            meta = parse_booking_meta(html)
+            s, meta = get_booking_meta(self.cfg)
             slots = get_available_slots(s, self.cfg, to_api_date(date_str),
                                         meta)
         except RuntimeError as e:
@@ -582,8 +600,8 @@ class PadelBot:
             return
         self.pending[chat_id] = {"action": "confirm", "date": date_str,
                                  "slot": best}
-        self._send(chat_id, f"Autobook best match: {best['label']} on "
-                            f"{date:%a %d %b}?",
+        self._send(chat_id, f"❓ Autobook best match: {date:%a %d %b %Y} "
+                            f"{best['label']}?",
                    self._confirm_book_keyboard())
 
     # ---- inline keyboards / callbacks ------------------------------------- #
@@ -617,7 +635,8 @@ class PadelBot:
                 return
             st["action"] = "confirm"
             st["slot"] = slot
-            self._send(chat_id, f"Book {slot['label']} on {st['date']}?",
+            d = datetime.strptime(st["date"], "%Y-%m-%d")
+            self._send(chat_id, f"❓ Book {d:%a %d %b %Y} {slot['label']}?",
                        self._confirm_book_keyboard())
         elif data == "bk:yes":
             st = self.pending.get(chat_id, {})
@@ -635,7 +654,7 @@ class PadelBot:
             self.pending[chat_id] = {"action": "confirm_cancel",
                                      "cancel_id": cancel_id,
                                      "formatted": formatted}
-            self._send(chat_id, f"Cancel {formatted}?",
+            self._send(chat_id, f"❓ Cancel {formatted}?",
                        {"inline_keyboard": [[
                            {"text": "✅ Yes, cancel",
                             "callback_data": "cxc:yes"},
@@ -648,15 +667,22 @@ class PadelBot:
                 return
             try:
                 s = get_authenticated_session(self.cfg)
-                ok, msg = cancel_booking(s, st["cancel_id"])
+                ok, status = cancel_booking_fast(s, st["cancel_id"])
             except RuntimeError as e:
                 self._send(chat_id, f"⚠️ {e}")
                 return
             self.pending.pop(chat_id, None)
             if ok:
                 self._send(chat_id, "✅ Booking cancelled.")
+                # Refresh the in-memory bookings cache so /mybookings no
+                # longer shows the cancelled slot.
+                try:
+                    refresh_state(self.cfg)
+                    _log("[telegram] bookings cache refreshed after cancel")
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    _log(f"[telegram] cache refresh failed (non-fatal): {e}")
             else:
-                self._send(chat_id, f"❌ Cancel failed: {msg}")
+                self._send(chat_id, f"❌ Cancel failed (HTTP {status}).")
         elif data == "cxc:no":
             self.pending.pop(chat_id, None)
             self._send(chat_id, "Kept — booking untouched.")
@@ -668,12 +694,14 @@ class PadelBot:
     def _do_book(self, chat_id: int, date_str: str, slot: dict) -> None:
         self._send(chat_id, "⏳ Submitting booking…")
         try:
-            s = get_authenticated_session(self.cfg)
-            html = fetch_booking_page(s, self.cfg)
-            meta = parse_booking_meta(html)
-            submit_booking(s, self.cfg, meta, date_str, slot,
-                           self.cfg.get("description", "Padel booking"))
-            ok = verify_booking_created(s, date_str, slot["start"])
+            s, meta = get_booking_meta(self.cfg)
+            submit_booking_fast(s, self.cfg, meta, date_str, slot,
+                                self.cfg.get("description", "Padel booking"))
+            # Fast verification via the slots endpoint (~0.3s): if the
+            # booking succeeded, the day now has 0 free slots.
+            api_date = f"{int(date_str[8:10])}-{int(date_str[5:7])}-{int(date_str[0:4])}"
+            verify_slots, _ = _slots_endpoint(s, self.cfg, api_date, meta)
+            ok = len(verify_slots) == 0
         except RuntimeError as e:
             self.pending.pop(chat_id, None)
             self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
@@ -686,13 +714,21 @@ class PadelBot:
         record_booking(date_str, slot["label"], ok)
         self.pending.pop(chat_id, None)
         if ok:
-            self._send(chat_id, f"✅ BOOKED: {slot['label']} on {date_str}\n\n"
-                                f"Verified — it now appears in your "
-                                f"'My Bookings'.")
+            d = datetime.strptime(date_str, "%Y-%m-%d")
+            self._send(chat_id, f"✅ BOOKED: {d:%a %d %b} {slot['label']}")
+            # Refresh the in-memory bookings cache so /mybookings shows the
+            # new slot (and we have its details_id for cancellation).
+            # Done synchronously after the user already got their confirmation.
+            try:
+                refresh_state(self.cfg)
+                _log("[telegram] bookings cache refreshed after booking")
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                _log(f"[telegram] cache refresh failed (non-fatal): {e}")
         else:
-            self._send(chat_id, f"❌ Booking FAILED for {slot['label']} on "
-                                f"{date_str}.\nThe portal did not create it "
-                                f"(check the daemon/terminal log for the "
+            d = datetime.strptime(date_str, "%Y-%m-%d")
+            self._send(chat_id, f"❌ Booking FAILED for {d:%a %d %b %Y} "
+                                f"{slot['label']}.\nThe portal did not create "
+                                f"it (check the daemon/terminal log for the "
                                 f"portal's error).")
 
     # ---- background autobooking (keep-alive + booking race) -------------- #
@@ -955,6 +991,13 @@ class PadelBot:
             self._send(chat_id, f"⚠️ Could not save config: {e}")
             return
         self.pending.pop(chat_id, None)
+        # Refresh the in-memory state (meta + bookings) so the autobook loop
+        # has fresh data. This is the ONE slow call (~5.5s) — done once per
+        # prefs-save.
+        try:
+            refresh_state(self.cfg)
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass  # non-fatal; the loop will fall back to the slots endpoint
         day_lines = []
         for d in slots:
             times = ", ".join(

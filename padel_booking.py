@@ -2050,9 +2050,20 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                                 f"{new_day.year}")
                     for attempt in range(1, 361):
                         try:
-                            _s = get_authenticated_session(cfg)
+                            # The slots endpoint needs the booking meta
+                            # (user_id / community_id / unit_id) to return
+                            # slots; those values are only known from the
+                            # booking page, NOT from config.json. Passing
+                            # meta=None (as before) sent empty
+                            # user/community/unit fields, so the portal
+                            # always returned 0 slots and this loop could
+                            # never see the new day's slots. get_booking_meta()
+                            # reuses the meta cached at startup, so after the
+                            # first call this is a cheap (no-network) lookup
+                            # and matches what run_booking_race() uses.
+                            _s, _meta = get_booking_meta(cfg)
                             _slots = get_available_slots(
-                                _s, cfg, api_date, None)
+                                _s, cfg, api_date, _meta)
                             if _slots:
                                 log(f"  Portal has slots for "
                                     f"{new_day:%a %d %b} "

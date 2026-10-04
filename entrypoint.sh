@@ -19,7 +19,7 @@ set -e
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
 
-cp -f /opt/padel/padel_booking.py /opt/padel/padel_telegram.py /app/
+cp -f /opt/padel/padel_booking.py /opt/padel/padel_telegram.py /opt/padel/google_calendar.py /app/
 chown -R "$PUID:$PGID" /app
 
 cd /app

@@ -36,6 +36,11 @@ from padel_booking import (
     save_config, WEEKDAY_NAME, ts_prefix, refresh_state,
     _slots_endpoint, get_bookings,
 )
+from google_calendar import (
+    sync_booking, sync_cancellation, get_setup_status,
+    run_google_auth, run_google_test, run_google_list_calendars,
+    start_callback_server, generate_auth_url, exchange_code_for_tokens,
+)
 
 HERE = Path(__file__).resolve().parent
 BOT_API = "https://api.telegram.org"
@@ -276,6 +281,8 @@ class PadelBot:
              "description": "Stop the background autobooking"},
             {"command": "prefs",
              "description": "Set days & preferred slots for autobooking"},
+            {"command": "setupgoogle",
+             "description": "Configure Google Calendar sync"},
         ]
         try:
             self.api.set_my_commands(commands)
@@ -306,6 +313,10 @@ class PadelBot:
             self._notify(
                 "🤖 Padel bot started — autobooking is active.\n"
                 "No preferred slots configured yet — send /prefs to set them.")
+        # Check Google Calendar configuration and notify if missing
+        gc_ready, gc_msg = get_setup_status(self.cfg)
+        if not gc_ready:
+            self._notify(gc_msg)
         worker = threading.Thread(target=self._poll_loop, daemon=True)
         worker.start()
         try:
@@ -413,6 +424,12 @@ class PadelBot:
                                     "email (or /login to restart).")
             return
 
+        # Pending Google Calendar setup flow
+        gc_state = self.pending.get(chat_id, {}).get("action")
+        if gc_state and gc_state.startswith("gcal_"):
+            self._on_gcal_setup(chat_id, gc_state, text)
+            return
+
         if not text.startswith("/"):
             return
 
@@ -439,6 +456,8 @@ class PadelBot:
             self._on_stopautobook(chat_id)
         elif cmd == "/prefs":
             self._on_prefs(chat_id)
+        elif cmd == "/setupgoogle":
+            self._on_setupgoogle(chat_id)
         else:
             self._send(chat_id, f"Unknown command {cmd}\n\n/help for the list.")
 
@@ -453,6 +472,180 @@ class PadelBot:
         self._send(chat_id, "📧 OTP sent to your email.\n"
                             "Reply here with the 6-digit code to finish "
                             "the login.")
+
+    # ---- Google Calendar setup flow ---------------------------------------- #
+    def _on_setupgoogle(self, chat_id: int) -> None:
+        """Start the interactive Google Calendar setup flow."""
+        self.pending[chat_id] = {"action": "gcal_email", "data": {}}
+        self._send(chat_id,
+            "📅 Google Calendar Setup\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Step 1/4: What's your Google email?\n"
+            "(the account that owns the calendar)")
+
+    def _on_gcal_setup(self, chat_id: int, step: str, text: str) -> None:
+        """Handle each step of the Google Calendar setup flow."""
+        st = self.pending.get(chat_id, {})
+        data = st.get("data", {})
+        if step == "gcal_email":
+            if "@" not in text:
+                self._send(chat_id, "That doesn't look like an email. "
+                                    "Try again (e.g. you@gmail.com)")
+                return
+            data["email"] = text
+            self.pending[chat_id] = {"action": "gcal_calendar", "data": data}
+            self._send(chat_id,
+                "Step 2/4: Which calendar should I use?\n"
+                "(e.g. 'Social', 'Work', or leave empty for default)")
+        elif step == "gcal_calendar":
+            data["calendar"] = text
+            self.pending[chat_id] = {"action": "gcal_client_id", "data": data}
+            self._send(chat_id,
+                "Step 3/4: Google OAuth Client ID\n"
+                "🔗 https://console.cloud.google.com/apis/credentials\n"
+                "(create a Web application type, then copy the Client ID)")
+        elif step == "gcal_client_id":
+            if not text or len(text) < 10:
+                self._send(chat_id, "That doesn't look like a valid Client ID.")
+                return
+            data["client_id"] = text
+            self.pending[chat_id] = {"action": "gcal_client_secret",
+                                     "data": data}
+            self._send(chat_id,
+                "Step 4/4: Google OAuth Client Secret\n"
+                "(from the same credentials page)")
+        elif step == "gcal_client_secret":
+            if not text or len(text) < 5:
+                self._send(chat_id, "That doesn't look like a valid Secret.")
+                return
+            data["client_secret"] = text
+            self._gcal_start_auth(chat_id, data)
+        elif step == "gcal_code":
+            result = st.get("_result", {})
+            if result.get("code"):
+                self._gcal_finish_auth(chat_id, data, result["code"])
+            elif result.get("error"):
+                self._send(chat_id, f"❌ Auth error: {result['error']}")
+                self.pending.pop(chat_id, None)
+            else:
+                self._gcal_finish_auth(chat_id, data, text)
+
+    def _gcal_start_auth(self, chat_id: int, data: dict) -> None:
+        """Start the OAuth callback server and send the auth URL."""
+        redirect_uri = "https://padel-booking.destr0.com/callback"
+        try:
+            result, server = start_callback_server(8010)
+        except Exception as e:
+            self._send(chat_id, f"❌ Could not start auth server: {e}")
+            self.pending.pop(chat_id, None)
+            return
+        auth_url = generate_auth_url(data["client_id"], redirect_uri)
+        self.pending[chat_id] = {
+            "action": "gcal_code",
+            "data": data,
+            "_result": result,
+            "_server": server,
+        }
+        self._send(chat_id,
+            "✅ Credentials saved. Now authorize:\n\n"
+            f"🔗 {auth_url}\n\n"
+            "Open that link in your browser and approve access.\n"
+            "If the page doesn't load, copy the 'code' parameter "
+            "from the URL and send it to me here.")
+        import threading
+        def _watch():
+            for _ in range(600):
+                import time; time.sleep(0.5)
+                r = result
+                if r.get("code") or r.get("error"):
+                    if self.pending.get(chat_id, {}).get("action") == "gcal_code":
+                        if r.get("code"):
+                            self._gcal_finish_auth(chat_id, data, r["code"])
+                        else:
+                            self._send(chat_id, f"❌ Auth error: {r['error']}")
+                            self.pending.pop(chat_id, None)
+                        return
+        threading.Thread(target=_watch, daemon=True).start()
+
+    def _gcal_finish_auth(self, chat_id: int, data: dict,
+                          code: str) -> None:
+        """Exchange the auth code for tokens, save config, run test."""
+        redirect_uri = "https://padel-booking.destr0.com/callback"
+        try:
+            tokens = exchange_code_for_tokens(
+                code, data["client_id"], data["client_secret"],
+                redirect_uri)
+        except Exception as e:
+            self._send(chat_id, f"❌ Token exchange failed: {e}\n\n"
+                                f"Send /setupgoogle to try again.")
+            self.pending.pop(chat_id, None)
+            return
+        refresh_token = tokens.get("refresh_token")
+        if not refresh_token:
+            self._send(chat_id,
+                "❌ No refresh token in response.\n"
+                "Try revoking access at: "
+                "https://myaccount.google.com/permissions\n"
+                "Then send /setupgoogle again.")
+            self.pending.pop(chat_id, None)
+            return
+        if "google_calendar" not in self.cfg:
+            self.cfg["google_calendar"] = {}
+        gc = self.cfg["google_calendar"]
+        gc["enabled"] = True
+        gc["email"] = data["email"]
+        gc["calendar"] = data.get("calendar", "")
+        gc["client_id"] = data["client_id"]
+        gc["client_secret"] = data["client_secret"]
+        gc["refresh_token"] = refresh_token
+        gc.setdefault("timezone", "Asia/Riyadh")
+        try:
+            save_config(self.cfg)
+        except Exception as e:
+            self._send(chat_id, f"⚠️ Saved tokens but failed to "
+                                f"write config: {e}")
+            self.pending.pop(chat_id, None)
+            return
+        self.pending.pop(chat_id, None)
+        self._send(chat_id, "✅ Tokens saved! Running connection test...")
+        try:
+            from google_calendar import GoogleCalendar
+            gc_client = GoogleCalendar(self.cfg)
+            token = gc_client._get_access_token()
+            from datetime import datetime, timedelta
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(gc_client.timezone)
+            now = datetime.now(tz)
+            from curl_cffi import requests as _req
+            resp = _req.get(
+                f"https://www.googleapis.com/calendar/v3/"
+                f"calendars/{gc_client.calendar_id}/events",
+                params={
+                    "timeMin": now.isoformat(),
+                    "timeMax": (now + timedelta(days=1)).isoformat(),
+                    "maxResults": 3,
+                },
+                headers={"Authorization": f"Bearer {token}"},
+                impersonate="chrome",
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                cal_name = data.get("calendar") or "default"
+                self._send(chat_id,
+                    f"🎉 Google Calendar is ready!\n"
+                    f"   Calendar: {cal_name}\n"
+                    f"   Email: {data['email']}\n\n"
+                    "Bookings will now sync to your calendar "
+                    "automatically.")
+            else:
+                self._send(chat_id,
+                    f"⚠️ Connected but listing events failed: "
+                    f"{resp.status_code}\n"
+                    "Check that the calendar name is correct.")
+        except Exception as e:
+            self._send(chat_id,
+                f"⚠️ Setup saved but test failed: {e}\n"
+                "Try running: python padel_booking.py google-test")
 
     def _on_status(self, chat_id: int) -> None:
         s = get_session()
@@ -686,6 +879,27 @@ class PadelBot:
                             remove_booking_record(_d.strftime("%Y-%m-%d"))
                         except ValueError:
                             pass
+                # Sync Google Calendar cancellation (non-fatal)
+                gc_cfg = self.cfg.get("google_calendar", {})
+                if gc_cfg.get("enabled"):
+                    try:
+                        if st.get("formatted"):
+                            _p = st["formatted"].rsplit(" ", 1)
+                            if len(_p) == 2:
+                                from datetime import datetime as _dt2
+                                _d2 = _dt2.strptime(_p[0], "%a %d %b %Y")
+                                if sync_cancellation(_d2.strftime("%Y-%m-%d"),
+                                                     _p[1], self.cfg):
+                                    self._send(chat_id, "📅 Event removed from Google Calendar.")
+                                else:
+                                    self._send(chat_id, "⚠️ Booking cancelled, but the "
+                                                         "Google Calendar event could not "
+                                                         "be deleted.")
+                    except Exception as e:  # pylint: disable=broad-exception-caught
+                        _log(f"[telegram] google calendar sync failed: {e}")
+                        self._send(chat_id, "⚠️ Booking cancelled, but the "
+                                             "Google Calendar event could not "
+                                             "be deleted.")
                 # Refresh the in-memory bookings cache so /mybookings no
                 # longer shows the cancelled slot.
                 try:
@@ -728,6 +942,22 @@ class PadelBot:
         if ok:
             d = datetime.strptime(date_str, "%Y-%m-%d")
             self._send(chat_id, f"✅ BOOKED: {d:%a %d %b} {slot['label']}")
+            # Sync Google Calendar (non-fatal)
+            gc_cfg = self.cfg.get("google_calendar", {})
+            if gc_cfg.get("enabled"):
+                try:
+                    if sync_booking(date_str, slot["label"], self.cfg,
+                                    self.cfg.get("description", "Padel booking")):
+                        self._send(chat_id, "📅 Event created on Google Calendar.")
+                    else:
+                        self._send(chat_id, "⚠️ Booking confirmed, but the "
+                                             "Google Calendar event could not "
+                                             "be created.")
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    _log(f"[telegram] google calendar sync failed: {e}")
+                    self._send(chat_id, "⚠️ Booking confirmed, but the "
+                                         "Google Calendar event could not "
+                                         "be created.")
             # Refresh the in-memory bookings cache so /mybookings shows the
             # new slot (and we have its details_id for cancellation).
             # Done synchronously after the user already got their confirmation.

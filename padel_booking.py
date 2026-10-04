@@ -70,6 +70,7 @@ from pathlib import Path
 
 from curl_cffi import requests  # browser TLS fingerprint (impersonate) to pass Akamai
 from bs4 import BeautifulSoup
+from google_calendar import sync_booking, sync_cancellation
 
 HERE = Path(__file__).resolve().parent
 BASE_URL = "https://myportal.asteco.com"
@@ -856,6 +857,7 @@ def cmd_book(cfg: dict, args: list) -> None:
     print(f"[diag] verify_booking_created: {ok}")
     if ok:
         print("Booking CONFIRMED - it now appears in your 'My Bookings'.")
+        sync_booking(args[0], target["label"], cfg, description)
     else:
         err = _booking_error(r)
         if err:
@@ -1455,6 +1457,10 @@ def cmd_cancel(cfg: dict, args: list) -> None:
     ok, msg = cancel_booking(s, target["details_id"])
     if ok:
         print(f"Cancelled: {msg}")
+        if target.get("from_dt") and target.get("to_dt"):
+            _d = target["from_dt"].strftime("%Y-%m-%d")
+            _s = f"{target['from_dt']:%H:%M}-{target['to_dt']:%H:%M}"
+            sync_cancellation(_d, _s, cfg)
     else:
         print(f"FAILED to cancel: {msg}")
         sys.exit(1)
@@ -1933,6 +1939,8 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                     log(f"*** BOOKED {best['label']} [{best['value']}] "
                         f"(confirmed: 0 slots remaining) {timing}")
                     notify_(f"✅ BOOKED: {target:%a %d %b} {best['label']}")
+                    sync_booking(target_str, best["label"], cfg,
+                                 cfg.get("description", "Padel booking"))
                     # Refresh the in-memory bookings list so /mybookings
                     # shows the new slot and count_active_bookings is
                     # accurate for the next attempt.
@@ -2129,11 +2137,33 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
         time.sleep(0.5)
 
 
+def _cmd_google_auth(cfg: dict, args: list) -> None:
+    """CLI: run the Google Calendar OAuth flow."""
+    from google_calendar import run_google_auth
+    positional = [a for a in args if not a.startswith("--")]
+    cid = positional[0] if len(positional) >= 1 else ""
+    csec = positional[1] if len(positional) >= 2 else ""
+    run_google_auth(cfg, cid, csec)
+
+
+def _cmd_google_test(cfg: dict) -> None:
+    """CLI: test the Google Calendar connection."""
+    from google_calendar import run_google_test
+    run_google_test(cfg)
+
+
+def _cmd_google_list_calendars(cfg: dict) -> None:
+    """CLI: list all accessible Google calendars."""
+    from google_calendar import run_google_list_calendars
+    run_google_list_calendars(cfg)
+
+
 def main() -> None:
     """Parse the command line and dispatch to the matching command."""
     commands = ("login-start", "login-finish", "login-status", "explore", "slots",
                 "book", "pick", "mybookings", "cancel", "autobook",
-                "keepalive", "telegram")
+                "keepalive", "telegram", "google-auth", "google-test",
+                "google-list-calendars")
     if len(sys.argv) < 2 or sys.argv[1] not in commands:
         print(__doc__)
         sys.exit(1)
@@ -2164,6 +2194,12 @@ def main() -> None:
         cmd_keepalive(cfg, args)
     elif cmd == "telegram":
         cmd_telegram(cfg, args)
+    elif cmd == "google-auth":
+        _cmd_google_auth(cfg, args)
+    elif cmd == "google-test":
+        _cmd_google_test(cfg)
+    elif cmd == "google-list-calendars":
+        _cmd_google_list_calendars(cfg)
 
 
 if __name__ == "__main__":

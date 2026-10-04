@@ -13,5 +13,14 @@
   "keepalive_minutes": 20,
   "booking_open_hour": 0,
   "telegram_bot_token": "123456:ABC-your-telegram-bot-token",
-  "telegram_chat_ids": [123456789]
+  "telegram_chat_ids": [123456789],
+  "google_calendar": {
+    "enabled": false,
+    "email": "you@gmail.com",
+    "calendar": "default",
+    "client_id": "your-client-id.apps.googleusercontent.com",
+    "client_secret": "your-client-secret",
+    "refresh_token": "your-refresh-token",
+    "timezone": "Asia/Riyadh"
+  }
 }

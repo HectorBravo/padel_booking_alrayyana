@@ -28,7 +28,8 @@ from padel_booking import (
     reset_session, save_session, is_logged_in, get_booking_meta,
     get_available_slots, submit_booking, submit_booking_fast,
     verify_booking_created,
-    record_booking, already_booked_successfully, fetch_my_bookings,
+    record_booking, already_booked_successfully, remove_booking_record,
+    fetch_my_bookings,
     cancel_booking, cancel_booking_fast, is_cancellable, is_cancelled,
     _booking_info, parse_date,
     to_api_date, preferred_slots_for_day, pick_best_slot, run_autobook_loop,
@@ -674,6 +675,17 @@ class PadelBot:
             self.pending.pop(chat_id, None)
             if ok:
                 self._send(chat_id, "✅ Booking cancelled.")
+                # Remove the booking record so autobook can retry this date
+                _fmt = st.get("formatted", "")
+                if _fmt:
+                    _parts = _fmt.rsplit(" ", 1)
+                    if len(_parts) == 2:
+                        try:
+                            from datetime import datetime as _dt
+                            _d = _dt.strptime(_parts[0], "%a %d %b %Y")
+                            remove_booking_record(_d.strftime("%Y-%m-%d"))
+                        except ValueError:
+                            pass
                 # Refresh the in-memory bookings cache so /mybookings no
                 # longer shows the cancelled slot.
                 try:

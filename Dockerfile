@@ -51,7 +51,7 @@ FROM base AS production
 
 # Canonical code in /opt/padel; /app is the data directory (mounted volume)
 COPY entrypoint.sh /opt/padel/entrypoint.sh
-COPY padel_booking.py padel_telegram.py /opt/padel/
+COPY padel_booking.py padel_telegram.py google_calendar.py /opt/padel/
 RUN chmod +x /opt/padel/entrypoint.sh \
     && mkdir -p /app \
     && chown -R 1000:1000 /app

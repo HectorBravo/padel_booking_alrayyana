@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
     ca-certificates \
     util-linux \
+    nano \
     && rm -rf /var/lib/apt/lists/*
 
 # The app runs as PUID:PGID (default 1000:1000 — set these to your host

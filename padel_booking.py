@@ -595,6 +595,9 @@ def refresh_state(cfg: dict) -> None:
     # 2. Fetch the user's existing bookings (bare POST, no GET).
     bookings = _fetch_my_bookings_fast(s)
     _STATE["bookings"] = bookings
+    # 3. Reconcile booked.json against the portal's actual bookings.
+    #    If the user cancelled directly on the portal, remove the stale record.
+    _reconcile_booked(bookings)
 
 
 def get_booking_meta(cfg: dict) -> tuple:
@@ -1011,6 +1014,38 @@ def already_booked_successfully(date_str: str) -> bool:
     """True if a booking for this date already succeeded (see booked.json)."""
     return any(r.get("date") == date_str and r.get("success")
                for r in load_booked())
+
+
+def remove_booking_record(date_str: str) -> None:
+    """Remove all booking records for *date_str* from booked.json."""
+    recs = load_booked()
+    filtered = [r for r in recs if r.get("date") != date_str]
+    if len(filtered) != len(recs):
+        BOOKED_FILE.write_text(json.dumps(filtered, indent=2))
+        BOOKED_FILE.chmod(0o600)
+
+
+def _reconcile_booked(portal_bookings: list) -> None:
+    """Remove stale booked.json entries that no longer have an active booking.
+
+    Compares local records against the portal's actual booking list. If a date
+    in booked.json has no corresponding non-cancelled booking in the portal,
+    the record is removed (the user likely cancelled directly on the portal).
+    """
+    recs = load_booked()
+    if not recs:
+        return
+    active_dates = set()
+    for b in portal_bookings:
+        if is_cancelled(b):
+            continue
+        dt = b.get("from_dt")
+        if dt is not None:
+            active_dates.add(dt.strftime("%Y-%m-%d"))
+    filtered = [r for r in recs if r.get("date") in active_dates]
+    if len(filtered) != len(recs):
+        BOOKED_FILE.write_text(json.dumps(filtered, indent=2))
+        BOOKED_FILE.chmod(0o600)
 
 
 # --------------------------------------------------------------------------- #
@@ -1992,6 +2027,15 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
             try:
                 keepalive(cfg)
                 log("Keep-alive OK (session refreshed).")
+                # Reconcile booked.json against the portal's real bookings
+                # (catches cancellations made directly on the portal).
+                try:
+                    s = get_session()
+                    bookings = _fetch_my_bookings_fast(s)
+                    _STATE["bookings"] = bookings
+                    _reconcile_booked(bookings)
+                except Exception:
+                    pass  # non-fatal
             except Exception as e:  # pylint: disable=broad-exception-caught
                 log(f"WARNING: keep-alive failed: {e}. "
                     f"Session may be expired - re-login needed!")

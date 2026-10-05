@@ -4,11 +4,52 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 05-10-2026 22:49:53 | [T4: Make Google Calendar sync non-fatal](#task-t4-make-google-calendar-sync-non-fatal) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 0/3 | 0m | none |
 | 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m | none |
 | 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m | none |
 | 10-04-2026 15:10:00 | [T3: Install nano in Docker image](#task-t3-install-nano-in-docker-image) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 5m | none |
 
 > ✅ **3 completed task(s)** — [View completed tasks](#completed-tasks)
+
+---
+
+## Task T4: Make Google Calendar sync non-fatal
+
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
+- **Created**: 05-10-2026 22:49:53
+- **Last Updated**: 05-10-2026 22:49:53
+- **Time Spent**: 0m
+- **Branch**: [`fix/ai-nonfatal-gcal-sync`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-nonfatal-gcal-sync)
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - `sync_booking` calls in `cmd_book`, `cmd_autobook`, and `run_autobook_loop` were not wrapped in try/except
+  - A Google Calendar API failure would crash the booking flow
+  - Added non-fatal error handling with user-friendly messages in all 3 call sites
+
+### User Confirmations
+
+None yet.
+
+### Subtasks / Plan
+
+- [ ] Wrap `sync_booking` in try/except in `cmd_book`
+- [ ] Wrap `sync_booking` in try/except in `cmd_autobook`
+- [ ] Wrap `sync_booking` in try/except in `run_autobook_loop`
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: Self-contained knowledge base to resume without other context.
+
+- **File**: `padel_booking.py`
+- **3 call sites** for `sync_booking`:
+  1. `cmd_book` (~line 860): After booking confirmed, calls `sync_booking(args[0], target["label"], cfg, description)`
+  2. `cmd_autobook` (~line 1791): After booking confirmed, calls `sync_booking(target_str, best["label"], cfg, cfg.get("description", "Padel booking"))`
+  3. `run_autobook_loop` (~line 1957): In the autobook loop, calls `sync_booking(target_str, best["label"], cfg, cfg.get("description", "Padel booking"))`
+- **Change**: Each call site now wraps `sync_booking` in try/except, prints/logs a non-fatal warning on failure, and notifies the user
+- **Base**: `a7fbf78` (current main HEAD)
+- **Branch**: `fix/ai-nonfatal-gcal-sync`
 
 ---
 

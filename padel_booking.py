@@ -857,7 +857,15 @@ def cmd_book(cfg: dict, args: list) -> None:
     print(f"[diag] verify_booking_created: {ok}")
     if ok:
         print("Booking CONFIRMED - it now appears in your 'My Bookings'.")
-        sync_booking(args[0], target["label"], cfg, description)
+        # Sync Google Calendar (non-fatal)
+        try:
+            if sync_booking(args[0], target["label"], cfg, description):
+                print("📅 Event created on Google Calendar.")
+            else:
+                print("⚠️ Booking confirmed, but the Google Calendar "
+                      "event could not be created.")
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            print(f"⚠️ Google Calendar sync failed (non-fatal): {e}")
     else:
         err = _booking_error(r)
         if err:
@@ -1783,6 +1791,16 @@ def cmd_autobook(cfg: dict, args: list) -> None:
         print("Response status:", r)
     if ok:
         print("Booking CONFIRMED - it now appears in your 'My Bookings'.")
+        # Sync Google Calendar (non-fatal)
+        try:
+            if sync_booking(target_str, best["label"], cfg,
+                            cfg.get("description", "Padel booking")):
+                print("📅 Event created on Google Calendar.")
+            else:
+                print("⚠️ Booking confirmed, but the Google Calendar "
+                      "event could not be created.")
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            print(f"⚠️ Google Calendar sync failed (non-fatal): {e}")
     else:
         print(f"Booking FAILED: the portal did not create the booking "
               f"(HTTP {r})")
@@ -1939,8 +1957,24 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                     log(f"*** BOOKED {best['label']} [{best['value']}] "
                         f"(confirmed: 0 slots remaining) {timing}")
                     notify_(f"✅ BOOKED: {target:%a %d %b} {best['label']}")
-                    sync_booking(target_str, best["label"], cfg,
-                                 cfg.get("description", "Padel booking"))
+                    # Sync Google Calendar (non-fatal)
+                    try:
+                        if sync_booking(target_str, best["label"], cfg,
+                                        cfg.get("description",
+                                                "Padel booking")):
+                            log("Google Calendar event created.")
+                            notify_("📅 Event created on Google Calendar.")
+                        else:
+                            log("Google Calendar event could not be "
+                                "created (disabled or error).")
+                            notify_("⚠️ Booking confirmed, but the "
+                                    "Google Calendar event could not "
+                                    "be created.")
+                    except Exception as e:  # pylint: disable=broad-exception-caught
+                        log(f"Google Calendar sync failed (non-fatal): {e}")
+                        notify_("⚠️ Booking confirmed, but the "
+                                "Google Calendar event could not "
+                                "be created.")
                     # Refresh the in-memory bookings list so /mybookings
                     # shows the new slot and count_active_bookings is
                     # accurate for the next attempt.

@@ -74,6 +74,13 @@ from google_calendar import sync_booking, sync_cancellation
 
 HERE = Path(__file__).resolve().parent
 BASE_URL = "https://myportal.asteco.com"
+# Default HTTP timeout (seconds) for every portal request. curl_cffi's
+# Session defaults to 30s, which is too tight for this portal: when it is
+# sluggish, calls such as the OTP login (POST /login/checkLogin) or the slow
+# /booking/myBooking endpoint can exceed 30s and curl aborts with
+# "curl: (28) Operation timed out after 30000 ms". We raise the session-wide
+# default to 90s so every request that does not override it gets that.
+PORTAL_TIMEOUT = 90
 CONFIG_FILE = HERE / "config.json"
 SESSION_FILE = HERE / "session.json"
 
@@ -149,7 +156,9 @@ def new_session(restore: bool = True) -> requests.Session:
     """Create a Chrome-impersonating session, optionally restoring cookies."""
     # impersonate="chrome" presents a real Chrome TLS/HTTP2 fingerprint so the
     # portal's Akamai bot-detection grants a genuine authenticated session.
-    s = requests.Session(impersonate="chrome")
+    # The session-wide default timeout is PORTAL_TIMEOUT (see module top); any
+    # request that doesn't pass an explicit timeout inherits it.
+    s = requests.Session(impersonate="chrome", timeout=PORTAL_TIMEOUT)
     s.headers.update({
         "Accept-Language": "en-US,en;q=0.9",
     })
@@ -1062,10 +1071,9 @@ def _reconcile_booked(portal_bookings: list) -> None:
 # --------------------------------------------------------------------------- #
 MYBOOKINGS_URL = f"{BASE_URL}/booking/myBooking"
 CANCEL_URL = f"{BASE_URL}/booking/cancelAmenityBooking"
-# The mybookings endpoint is the portal's slowest call (~4.5s). curl_cffi's
-# Session defaults to a 30s timeout, which is too tight when the portal is
-# sluggish, so we raise it to 90s for every /booking/myBooking request.
-MYBOOKINGS_TIMEOUT = 90
+# The mybookings endpoint is the portal's slowest call (~4.5s). It uses the
+# same raised timeout as the rest of the portal session (see PORTAL_TIMEOUT).
+MYBOOKINGS_TIMEOUT = PORTAL_TIMEOUT
 
 
 def _parse_booking_dt(x: str):

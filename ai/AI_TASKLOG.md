@@ -4,11 +4,54 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 08-10-2026 00:27:49 | [T5: Increase mybookings timeout to 90s](#task-t5-increase-mybookings-timeout-to-90s) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 0/3 | 0m | none |
 | 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m | none |
 | 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m | none |
 | 10-04-2026 15:10:00 | [T3: Install nano in Docker image](#task-t3-install-nano-in-docker-image) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 5m | none |
 
 > ✅ **4 completed task(s)** — [View completed tasks](#completed-tasks)
+
+---
+
+## Task T5: Increase mybookings timeout to 90s
+
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
+- **Created**: 08-10-2026 00:27:49
+- **Last Updated**: 08-10-2026 00:27:49
+- **Time Spent**: 0m
+- **Branch**: [`fix/ai-mybookings-timeout-90s`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-mybookings-timeout-90s)
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - The `/booking/myBooking` calls in `padel_booking.py` pass **no** explicit timeout, so they inherit curl_cffi `Session`'s default of **30s** (verified live: `requests.Session(impersonate="chrome").timeout == 30`).
+  - This makes the slow mybookings endpoint (~4.5s normally) vulnerable to timeouts when the portal is sluggish. Bumping to 90s gives ~3× headroom without affecting other endpoints.
+  - Fix is surgical: a single `MYBOOKINGS_TIMEOUT = 90` constant applied to the 3 mybookings call sites only.
+
+### User Confirmations
+
+None yet.
+
+### Subtasks / Plan
+
+- [ ] Add `MYBOOKINGS_TIMEOUT = 90` constant in `padel_booking.py` (next to `MYBOOKINGS_URL` / `CANCEL_URL`)
+- [ ] Apply `timeout=MYBOOKINGS_TIMEOUT` to `_fetch_my_bookings_fast` (POST), `_fetch_mybookings_page` (POST), and `fetch_my_bookings` (GET)
+- [ ] Verify with `py_compile` and confirm no other call sites changed
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: Self-contained knowledge base to resume without other context.
+
+- **File**: `padel_booking.py`
+- **Library**: `padel_booking.py` imports `from curl_cffi import requests` (line 71), NOT stdlib `requests`. `curl_cffi.requests.Session` uses `**kwargs`/`BaseSessionParams` and stores the timeout as `self.timeout`; when a request method is called without an explicit `timeout`, it falls back to `self.timeout`, whose default is **30** (confirmed by instantiating a session: `self.timeout = 30`).
+- **Shared session**: `_SESSION` (line 194) is created by `new_session()` (line 148) → `requests.Session(impersonate="chrome")`. No timeout is set there, so the 30s library default applies to every request that doesn't pass one.
+- **The 3 call sites that hit `/booking/myBooking`** (all currently timeout-less):
+  1. `_fetch_my_bookings_fast` (line ~571): `r = s.post(f"{BASE_URL}/booking/myBooking", data=data, allow_redirects=True)` → add `timeout=MYBOOKINGS_TIMEOUT`.
+  2. `_fetch_mybookings_page` (line ~1175): `r = s.post(f"{BASE_URL}/{post_url}", data=data, allow_redirects=True)` → add `timeout=MYBOOKINGS_TIMEOUT`.
+  3. `fetch_my_bookings` (line ~1191): `r = s.get(MYBOOKINGS_URL, allow_redirects=True)` → add `timeout=MYBOOKINGS_TIMEOUT`.
+- **Where the constant goes**: `padel_booking.py` lines 1062-1063 already define `MYBOOKINGS_URL = f"{BASE_URL}/booking/myBooking"` and `CANCEL_URL = f"{BASE_URL}/booking/cancelAmenityBooking"`. Add `MYBOOKINGS_TIMEOUT = 90` immediately after (line 1064 area). Note `_fetch_my_bookings_fast` (line 559) is defined *before* this constant block but Python resolves the global at call time, so this is safe.
+- **Do NOT touch** the many other timeout values in `google_calendar.py` (all `timeout=30` — that's a different service) or the Telegram `get_updates` / autobook-race `timeout=18000` / `event.wait(timeout=900)` values.
+- **Base**: `41ff437` (current `main` HEAD). **Branch**: `fix/ai-mybookings-timeout-90s` (create from `main`, push to origin). **User's current branch**: `main` (the task log is committed/pushed to `main`).
 
 ---
 

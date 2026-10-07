@@ -4,23 +4,22 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 08-10-2026 01:47:09 | [T6: Raise portal-wide session timeout to 90s](#task-t6-raise-portal-wide-session-timeout-to-90s) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 0/5 | 0m | none |
 | 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m | none |
 | 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m | none |
 | 10-04-2026 15:10:00 | [T3: Install nano in Docker image](#task-t3-install-nano-in-docker-image) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 5m | none |
 
-> ✅ **5 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **6 completed task(s)** — [View completed tasks](#completed-tasks)
 
 ---
 
 ## Task T6: Raise portal-wide session timeout to 90s
-- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 08-10-2026 01:47:09
-- **Last Updated**: 08-10-2026 01:47:09
-- **Time Spent**: 0m
-- **Branch**: [`fix/ai-portal-session-timeout-90s`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-portal-session-timeout-90s) (pending)
-- **Commit(s)**: pending
+- **Last Updated**: 08-10-2026 01:57:09
+- **Time Spent**: 10m
+- **Branch**: [`fix/ai-portal-session-timeout-90s`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-portal-session-timeout-90s)
+- **Commit(s)**: [062d106](https://github.com/HectorBravo/padel_booking_alrayyana/commit/062d106515f2fa150ce002d77a17f0af6e2a39da) (code) · [2d342cb](https://github.com/HectorBravo/padel_booking_alrayyana/commit/2d342cb92ef66b0b1449e6e8c80795c997c82877) (PR #5 merge)
 - **Blockers**: none
 - **Findings & Notes**:
   - **Symptom**: at program start the bot fails with `Login failed: Failed to perform, curl: (28) Operation timed out after 30002 milliseconds with 0 bytes received` → the **login** phase (`login_start`: `GET /`, `POST /login/checkLogin`) timed out at exactly 30 s.
@@ -40,11 +39,11 @@ None yet.
 
 ### Subtasks / Plan
 
-- [ ] Introduce `PORTAL_TIMEOUT = 90` constant next to `BASE_URL`
-- [ ] Apply `timeout=PORTAL_TIMEOUT` in `new_session()` so every portal request inherits 90 s
-- [ ] Rebase `MYBOOKINGS_TIMEOUT` onto `PORTAL_TIMEOUT` (single source of truth)
-- [ ] Verify with `py_compile` + live check that `new_session().timeout == 90`
-- [ ] Deploy to production: PR → merge to `main` → confirm Docker image rebuild
+- [x] Introduce `PORTAL_TIMEOUT = 90` constant next to `BASE_URL`
+- [x] Apply `timeout=PORTAL_TIMEOUT` in `new_session()` so every portal request inherits 90 s
+- [x] Rebase `MYBOOKINGS_TIMEOUT` onto `PORTAL_TIMEOUT` (single source of truth)
+- [x] Verify with `py_compile` + live check that `new_session().timeout == 90`
+- [x] Deploy to production: PR → merge to `main` → confirm Docker image rebuild (PR #5 merged, commit 2d342cb)
 ### Full Context Notes for AI Agents
 
 > **Purpose**: Self-contained knowledge base to resume without other context.
@@ -275,6 +274,7 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
+| 08-10-2026 01:47:09 | [T6: Raise portal-wide session timeout to 90s](#task-t6-raise-portal-wide-session-timeout-to-90s) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 10m |
 | 08-10-2026 00:27:49 | [T5: Increase mybookings timeout to 90s](#task-t5-increase-mybookings-timeout-to-90s) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/5 | 6m |
 | 05-10-2026 22:49:53 | [T4: Make Google Calendar sync non-fatal](#task-t4-make-google-calendar-sync-non-fatal) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 3/3 | 5m |
 | 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m |

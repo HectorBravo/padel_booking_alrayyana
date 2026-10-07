@@ -4,24 +4,23 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 08-10-2026 00:27:49 | [T5: Increase mybookings timeout to 90s](#task-t5-increase-mybookings-timeout-to-90s) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 0/3 | 0m | none |
 | 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m | none |
 | 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m | none |
 | 10-04-2026 15:10:00 | [T3: Install nano in Docker image](#task-t3-install-nano-in-docker-image) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 5m | none |
 
-> ✅ **4 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **5 completed task(s)** — [View completed tasks](#completed-tasks)
 
 ---
 
 ## Task T5: Increase mybookings timeout to 90s
 
-- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 08-10-2026 00:27:49
-- **Last Updated**: 08-10-2026 00:27:49
-- **Time Spent**: 0m
+- **Last Updated**: 08-10-2026 00:31:55
+- **Time Spent**: 4m
 - **Branch**: [`fix/ai-mybookings-timeout-90s`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-mybookings-timeout-90s)
-- **Commit(s)**: pending
+- **Commit(s)**: [13be7da](https://github.com/HectorBravo/padel_booking_alrayyana/commit/13be7da)
 - **Blockers**: none
 - **Findings & Notes**:
   - The `/booking/myBooking` calls in `padel_booking.py` pass **no** explicit timeout, so they inherit curl_cffi `Session`'s default of **30s** (verified live: `requests.Session(impersonate="chrome").timeout == 30`).
@@ -34,9 +33,9 @@ None yet.
 
 ### Subtasks / Plan
 
-- [ ] Add `MYBOOKINGS_TIMEOUT = 90` constant in `padel_booking.py` (next to `MYBOOKINGS_URL` / `CANCEL_URL`)
-- [ ] Apply `timeout=MYBOOKINGS_TIMEOUT` to `_fetch_my_bookings_fast` (POST), `_fetch_mybookings_page` (POST), and `fetch_my_bookings` (GET)
-- [ ] Verify with `py_compile` and confirm no other call sites changed
+- [x] Add `MYBOOKINGS_TIMEOUT = 90` constant in `padel_booking.py` (next to `MYBOOKINGS_URL` / `CANCEL_URL`)
+- [x] Apply `timeout=MYBOOKINGS_TIMEOUT` to `_fetch_my_bookings_fast` (POST), `_fetch_mybookings_page` (POST), and `fetch_my_bookings` (GET)
+- [x] Verify with `py_compile` and confirm no other call sites changed
 
 ### Full Context Notes for AI Agents
 
@@ -215,6 +214,7 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
+| 08-10-2026 00:27:49 | [T5: Increase mybookings timeout to 90s](#task-t5-increase-mybookings-timeout-to-90s) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 3/3 | 4m |
 | 05-10-2026 22:49:53 | [T4: Make Google Calendar sync non-fatal](#task-t4-make-google-calendar-sync-non-fatal) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 3/3 | 5m |
 | 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m |
 | 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m |

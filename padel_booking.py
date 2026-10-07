@@ -568,7 +568,8 @@ def _fetch_my_bookings_fast(s: requests.Session) -> list:
         "serach_val[id_service_req_status]": "66",  # Approved
         "serach_val[page_num]": "1",
     }
-    r = s.post(f"{BASE_URL}/booking/myBooking", data=data, allow_redirects=True)
+    r = s.post(f"{BASE_URL}/booking/myBooking", data=data,
+               allow_redirects=True, timeout=MYBOOKINGS_TIMEOUT)
     if "/login" in r.url.lower():
         raise RuntimeError("Session expired. Re-login before listing bookings.")
     return _parse_booking_rows(r.text)
@@ -1061,6 +1062,10 @@ def _reconcile_booked(portal_bookings: list) -> None:
 # --------------------------------------------------------------------------- #
 MYBOOKINGS_URL = f"{BASE_URL}/booking/myBooking"
 CANCEL_URL = f"{BASE_URL}/booking/cancelAmenityBooking"
+# The mybookings endpoint is the portal's slowest call (~4.5s). curl_cffi's
+# Session defaults to a 30s timeout, which is too tight when the portal is
+# sluggish, so we raise it to 90s for every /booking/myBooking request.
+MYBOOKINGS_TIMEOUT = 90
 
 
 def _parse_booking_dt(x: str):
@@ -1172,7 +1177,8 @@ def _fetch_mybookings_page(s: requests.Session, post_url: str,
     data["serach_val[page_num]"] = str(page_num)
     if status_val is not None:
         data["serach_val[id_service_req_status]"] = status_val
-    r = s.post(f"{BASE_URL}/{post_url}", data=data, allow_redirects=True)
+    r = s.post(f"{BASE_URL}/{post_url}", data=data, allow_redirects=True,
+               timeout=MYBOOKINGS_TIMEOUT)
     return r.text
 
 
@@ -1188,7 +1194,7 @@ def fetch_my_bookings(s: requests.Session, status: str | None = None) -> list:
     pages 2..N -- and page 1 when a filter is applied -- are the AJAX POST
     the browser uses (see _fetch_mybookings_page).
     """
-    r = s.get(MYBOOKINGS_URL, allow_redirects=True)
+    r = s.get(MYBOOKINGS_URL, allow_redirects=True, timeout=MYBOOKINGS_TIMEOUT)
     if "/login" in r.url.lower():
         raise RuntimeError("Session expired. Re-login before listing bookings.")
     soup = BeautifulSoup(r.text, "html.parser")

@@ -17,25 +17,35 @@
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 08-10-2026 00:27:49
-- **Last Updated**: 08-10-2026 00:31:55
-- **Time Spent**: 4m
+- **Last Updated**: 08-10-2026 01:04:46
+- **Time Spent**: 6m
 - **Branch**: [`fix/ai-mybookings-timeout-90s`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-mybookings-timeout-90s)
-- **Commit(s)**: [13be7da](https://github.com/HectorBravo/padel_booking_alrayyana/commit/13be7da)
+- **Commit(s)**: [13be7da](https://github.com/HectorBravo/padel_booking_alrayyana/commit/13be7da) (code on AI branch), [526321f](https://github.com/HectorBravo/padel_booking_alrayyana/commit/526321f) (merge to `main`)
 - **Blockers**: none
 - **Findings & Notes**:
   - The `/booking/myBooking` calls in `padel_booking.py` pass **no** explicit timeout, so they inherit curl_cffi `Session`'s default of **30s** (verified live: `requests.Session(impersonate="chrome").timeout == 30`).
   - This makes the slow mybookings endpoint (~4.5s normally) vulnerable to timeouts when the portal is sluggish. Bumping to 90s gives ~3× headroom without affecting other endpoints.
   - Fix is surgical: a single `MYBOOKINGS_TIMEOUT = 90` constant applied to the 3 mybookings call sites only.
+  - **Deployed to production** on user request ("llevalo a produccion"): opened [PR #4](https://github.com/HectorBravo/padel_booking_alrayyana/pull/4) and merged it to `main` (merge commit `526321f`). The `Build and Push Docker Image` workflow (`.github/workflows/docker-publish.yml`) ran on the merge (run `37686567087`, ✓ success in 36s) and republished `hecbr/padel-booking-alrayyana` (tags `latest` + SHA) to Docker Hub **with the 90s timeout**. The change is therefore live for any new container pull.
+  - **Remaining host step (user)**: on the production host, `docker compose pull && docker compose up -d` to pull the new image and restart the running container (the entrypoint re-syncs the `.py` files on start). `docker` is not installed on this dev machine, so the pull/restart must run on the host.
 
 ### User Confirmations
 
-None yet.
+**Pending (awaiting user response):**
+
+None.
+
+**Confirmed (user provided):**
+
+- (08-10-2026 ~01:00) "¿Llevarlo a producción?" → "llevalo a produccion" (user approved merging to `main` / rebuilding the production image).
 
 ### Subtasks / Plan
 
 - [x] Add `MYBOOKINGS_TIMEOUT = 90` constant in `padel_booking.py` (next to `MYBOOKINGS_URL` / `CANCEL_URL`)
 - [x] Apply `timeout=MYBOOKINGS_TIMEOUT` to `_fetch_my_bookings_fast` (POST), `_fetch_mybookings_page` (POST), and `fetch_my_bookings` (GET)
 - [x] Verify with `py_compile` and confirm no other call sites changed
+- [x] Deploy to production: open PR #4, merge to `main`, confirm Docker image rebuilt
+- [ ] (user) On the production host: `docker compose pull && docker compose up -d` to activate the new image
 
 ### Full Context Notes for AI Agents
 
@@ -214,7 +224,7 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
-| 08-10-2026 00:27:49 | [T5: Increase mybookings timeout to 90s](#task-t5-increase-mybookings-timeout-to-90s) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 3/3 | 4m |
+| 08-10-2026 00:27:49 | [T5: Increase mybookings timeout to 90s](#task-t5-increase-mybookings-timeout-to-90s) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/5 | 6m |
 | 05-10-2026 22:49:53 | [T4: Make Google Calendar sync non-fatal](#task-t4-make-google-calendar-sync-non-fatal) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 3/3 | 5m |
 | 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m |
 | 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m |

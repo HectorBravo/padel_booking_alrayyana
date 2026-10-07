@@ -4,6 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 08-10-2026 01:47:09 | [T6: Raise portal-wide session timeout to 90s](#task-t6-raise-portal-wide-session-timeout-to-90s) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 0/5 | 0m | none |
 | 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m | none |
 | 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m | none |
 | 10-04-2026 15:10:00 | [T3: Install nano in Docker image](#task-t3-install-nano-in-docker-image) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 5m | none |
@@ -12,6 +13,56 @@
 
 ---
 
+## Task T6: Raise portal-wide session timeout to 90s
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
+- **Created**: 08-10-2026 01:47:09
+- **Last Updated**: 08-10-2026 01:47:09
+- **Time Spent**: 0m
+- **Branch**: [`fix/ai-portal-session-timeout-90s`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-portal-session-timeout-90s) (pending)
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - **Symptom**: at program start the bot fails with `Login failed: Failed to perform, curl: (28) Operation timed out after 30002 milliseconds with 0 bytes received` → the **login** phase (`login_start`: `GET /`, `POST /login/checkLogin`) timed out at exactly 30 s.
+  - **Root cause**: T5 only raised the timeout on the 3 *mybookings* call sites. Every *other* portal request (login, `is_logged_in`, slots, book, cancel) is made **without** an explicit `timeout`, so it inherits the curl_cffi `Session` default of **30 s**. `new_session()` created `requests.Session(impersonate="chrome")` with no timeout → default 30 (confirmed live: `.timeout == 30`). When the portal (already the slow one) takes >30 s on any phase of the OTP login, curl aborts with `curl: (28)` after 30000 ms.
+  - **Fix**: set the **session-wide** default timeout to 90 s in one place — `new_session()` → `requests.Session(impersonate="chrome", timeout=PORTAL_TIMEOUT)` — and introduce `PORTAL_TIMEOUT = 90` next to `BASE_URL`. `MYBOOKINGS_TIMEOUT` is now `PORTAL_TIMEOUT` (same value, single source of truth) so the existing mybookings `timeout=` call sites keep working. Any request that doesn't pass an explicit timeout now gets 90 s.
+  - **Verified live**: after the change `new_session(restore=False).timeout == 90` (was 30); `py_compile` passes. Per-call `timeout=` overrides (Google Calendar `timeout=30`, Telegram `get_updates timeout=50`/`timeout=timeout`, webhook `timeout=15`, autobook race `timeout=18000`, `event.wait(timeout=900)`) are untouched — different services, keep their own values.
+  - **Deploy (user intent "llevalo a produccion")**: same production flow as T5 — PR → merge to `main` → GitHub Actions rebuilds `hecbr/padel-booking-alrayyana`.
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+- (08-10-2026 ~01:45) Reported the 30 s `curl: (28)` login timeout at program start and asked why it still happens → AI confirmed the login (and all non-mybookings) requests still used the 30 s `Session` default; the user's standing intent is "llevalo a produccion".
+
+**Confirmed (user provided):**
+
+None yet.
+
+### Subtasks / Plan
+
+- [ ] Introduce `PORTAL_TIMEOUT = 90` constant next to `BASE_URL`
+- [ ] Apply `timeout=PORTAL_TIMEOUT` in `new_session()` so every portal request inherits 90 s
+- [ ] Rebase `MYBOOKINGS_TIMEOUT` onto `PORTAL_TIMEOUT` (single source of truth)
+- [ ] Verify with `py_compile` + live check that `new_session().timeout == 90`
+- [ ] Deploy to production: PR → merge to `main` → confirm Docker image rebuild
+### Full Context Notes for AI Agents
+
+> **Purpose**: Self-contained knowledge base to resume without other context.
+
+- **Why T5 was not enough**: T5 added `timeout=MYBOOKINGS_TIMEOUT` only to the 3 `/booking/myBooking` calls. The **login flow** (`login_start`/`login_finish` in `padel_booking.py`, plus `is_logged_in`, `get_authenticated_session`, slots/book) never passes an explicit `timeout`, so those calls fall back to the `curl_cffi` `Session.timeout` default, which is **30** (a bare `Session(impersonate="chrome")` → `.timeout == 30`, confirmed live). That is exactly the `30002 ms` / `curl: (28)` the user saw at startup (login is the first portal call the bot makes).
+- **Files/lines** (content anchors; line numbers shift slightly after edit):
+  - `padel_booking.py` `BASE_URL = "https://myportal.asteco.com"` — added `PORTAL_TIMEOUT = 90` immediately after `BASE_URL` (comment explains the 30→90 rationale and the `curl: (28)` symptom).
+  - `new_session(restore)` — was `s = requests.Session(impersonate="chrome")`; now `s = requests.Session(impersonate="chrome", timeout=PORTAL_TIMEOUT)`. This single change makes **every** bot session (shared `_SESSION`, login sessions, `get_authenticated_session`) inherit 90 s. `curl_cffi.requests.Session` accepts `timeout=` in the constructor (verified: `Session(impersonate="chrome", timeout=90).timeout == 90`).
+  - `MYBOOKINGS_TIMEOUT` block (near `MYBOOKINGS_URL`/`CANCEL_URL`) — value changed from literal `90` to `PORTAL_TIMEOUT` (same value, now single-source). The 3 mybookings call sites still pass `timeout=MYBOOKINGS_TIMEOUT` (explicit) → behavior unchanged.
+- **Intentionally NOT changed** (different services, keep their own values): `google_calendar.py` all `timeout=30` (Google API); `padel_telegram.py` `get_updates(..., timeout=50)` (long-poll), the `requests.post(url, json=params, timeout=timeout)` Telegram call, the webhook `timeout=15`, autobook `run_booking_race(..., timeout=18000)` and `event.wait(timeout=900)`. Unrelated to the Asteco portal and were correct before.
+- **Verification command**: `python -c "from padel_booking import new_session; print(new_session(restore=False).timeout)"` → expected `90`. Also `python -m py_compile padel_booking.py`.
+- **Base**: `d5e90ab` (current `main` HEAD). **Branch**: create `fix/ai-portal-session-timeout-90s` from `main`, push, open PR, merge to `main`, confirm the `Build and Push Docker Image` workflow run succeeds.
+- **Production**: `docker` is NOT on this dev machine. After the merge rebuilds `hecbr/padel-booking-alrayyana` on Docker Hub, the production host must run `docker compose pull && docker compose up -d` to activate the new image (entrypoint re-syncs `.py` on start).
+- **Git identity**: override only `GIT_AUTHOR_NAME="AI_bot"` and `GIT_COMMITTER_NAME="AI_bot"`; do NOT set author/committer email (use the user's `git config user.email`). Commit tag format `fix(portal): [ai] ...` / `docs(ai): ...`. Push the task log to the user's current branch (`main`).
+
+---
+
+## Task T5: Increase mybookings timeout to 90s
 ## Task T5: Increase mybookings timeout to 90s
 
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>

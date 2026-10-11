@@ -4,6 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 11-10-2026 15:50:19 | [T7: Diagnose OTP login hang; session check via /dashboard](#task-t7-diagnose-otp-login-hang-session-check-via-dashboard) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 1/10 | 0m | none |
 | 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m | none |
 | 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m | none |
 | 10-04-2026 15:10:00 | [T3: Install nano in Docker image](#task-t3-install-nano-in-docker-image) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 5m | none |
@@ -12,7 +13,67 @@
 
 ---
 
+## Task T7: Diagnose OTP login hang; session check via /dashboard
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
+- **Created**: 11-10-2026 15:50:19
+- **Last Updated**: 11-10-2026 15:50:19
+- **Time Spent**: 0m
+- **Branch**: [`fix/ai-login-diag-dashboard-check`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-login-diag-dashboard-check)
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - **Symptom (user report)**: a manual browser login takes 3-4 s total (`/login/checkLogin` → `/login/checkOtp` → `verifyOtp` → `/dashboard/index`), yet the bot keeps failing with `Login failed: Failed to perform, curl: (28) Operation timed out after 90xxx ms **with 0 bytes received**` (message comes from `padel_telegram.py:414`, the OTP-reply handler wrapping `login_finish`).
+  - **Key insight**: `0 bytes received` = the portal **never answered** that request at all — it is a silent drop (WAF/Akamai blackhole), not slowness. That is why T6's 90 s default only delays the same failure.
+  - **Why the browser works and the bot doesn't**: the bot's `login_finish` (`padel_booking.py:393-429`) builds a **fresh** session (`new_session(restore=False)` at :401 — new TLS/HTTP2 fingerprint vs the `login_start` connection) and POSTs `/login/verifyOtp` (:406) with **no `Referer` header**, then GETs the redirect target (:416). The browser does the same steps over the *same already-validated connection* with `Referer: .../login/checkOtp`. The OTP email arriving proves `checkLogin`+`checkOtp` succeed from the bot; the suspect is the `verifyOtp` POST (or the redirect GET) on the new connection.
+  - **Changes in this task**: (1) `is_logged_in()` now checks `GET /dashboard/index` directly (same criterion: `200` and final URL without `/login`) instead of `GET /asset/assetbooking/{id}` — per user instruction, mirrors the browser flow, faster; (2) every request of `login_start` / `login_finish` / `is_logged_in` is wrapped in the **existing but previously uncalled** `_timed()` (`padel_booking.py:264`) so the production log records each step (`[http] POST /login/verifyOtp -> 200 in 1.3s` or `FAILED after 90.02s: ...`); (3) `set_http_log` is wired in `main()` and the startup line prints the active `PORTAL_TIMEOUT` (confirms the deployed image value).
+  - **Next if the hang persists after deploy**: replicate the browser's `verifyOtp` request headers (Referer/Origin/Accept/X-Requested-With) from the user's DevTools capture (planned T8).
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+- [ ] (11-10-2026 15:50:19) DevTools request headers of the browser's `POST https://myportal.asteco.com/login/verifyOtp` (sent from the `/login/checkOtp` page) — needed for the follow-up fix only if the instrumented log still shows a silent drop.
+
+**Confirmed (user provided):**
+
+- (11-10-2026 ~15:35) "¿Qué endpoint consultas para validar la cookie de la sesión?" → "puedes ir directamente a https://myportal.asteco.com/dashboard/index".
+- (11-10-2026 ~15:45) "¿Cómo procedo con el diagnóstico?" → "Sí, haz 1+2: instrumentar el login (log por petición) + cambiar is_logged_in() a /dashboard/index, y te pido los headers de verifyOtp de DevTools para el paso 3."
+
+### Subtasks / Plan
+
+- [x] Record T7 in `ai/AI_TASKLOG.md` before touching code (dedicated `docs(ai):` commit on `main`)
+- [ ] `is_logged_in()` → `GET /dashboard/index` (keep `(s, cfg)` signature; same `/login`-redirect criterion)
+- [ ] Instrument `login_start` (GET /, POST /login/checkLogin), `login_finish` (POST /login/verifyOtp, GET redirect target) and `is_logged_in` via `_timed()`
+- [ ] Wire `set_http_log` in `main()` (all commands incl. `telegram`) + print active `PORTAL_TIMEOUT` at startup
+- [ ] Verify: `py_compile` both files, `new_session().timeout == 90`, one live `login-status` (single read-only GET to the portal with saved cookies)
+- [ ] Code commit on `fix/ai-login-diag-dashboard-check` + push to origin
+- [ ] Open PR, merge to `main`, confirm the `Build and Push Docker Image` workflow run succeeds
+- [ ] Final log commit on `main` (status `done`, real hashes) + fast-forward the AI branch + re-push
+- [ ] (user) Production host: `docker compose pull && docker compose up -d`; check the `[http]` lines of the next login
+- [ ] (user, if login still fails) Provide DevTools `verifyOtp` headers → follow-up fix (T8)
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: Self-contained knowledge base to resume without other context.
+
+- **Repo**: `D:\Repos\padel_booking_alrayyana`, remote `git@github.com:HectorBravo/padel_booking_alrayyana.git`, base `main` HEAD `600a92f` (T6 final log). Dev machine is Windows; **no docker** (production pull must run on the host); `gh` CLI available (v2.102.0) for PR create/merge.
+- **Git identity (per project rules)**: env vars `GIT_AUTHOR_NAME="AI_bot"` + `GIT_COMMITTER_NAME="AI_bot"` only; never set author/committer email (user's `git config user.email` stays untouched). Every AI commit message contains `[ai]` after the colon. Task log commits: `docs(ai): [ai] ...` pushed to `main` (user's current branch). Code goes on `fix/ai-login-diag-dashboard-check`.
+- **Symptom chain**: `padel_telegram.py:399-424` — when the user replies with the OTP, `_on_message` calls `login_finish(self.cfg, digits)` (:407); any exception becomes `❌ Login failed: {e}` (:414). `e` is the `curl: (28) ... 0 bytes received` from `curl_cffi`. Same failure reachable from CLI `login-finish` (`padel_booking.py:455-459`) and autobook re-login (`padel_telegram.py:988-1024`).
+- **`login_finish` exact steps** (`padel_booking.py:393-429`): (1) `s = new_session(restore=False)` (:401, fresh session; pending cookies loaded via `_load_cookies` :402 from `pending_login.json`); (2) `r2 = s.post(BASE_URL + "/login/verifyOtp", data={"user_otp": otp, **otp_fields})` (:406-407) — AJAX endpoint returning a redirect URL, or literal `"2"` (expired) / `"3"` (invalid) checked at :408-412; (3) `target = resp if resp.startswith("http") else BASE_URL + resp` (:415), then `s.get(target, allow_redirects=True)` (:416); (4) `if not is_logged_in(s, cfg): raise RuntimeError("OTP accepted but session still not authenticated.")` (:418-419); (5) `save_session(s)`, `install_session(s)`, clear `_STATE`, `PENDING_FILE.unlink()` (:421-428).
+- **`login_start` exact steps** (`padel_booking.py:352-390`): `s = new_session(restore=False)` (:356); `s.get(BASE_URL + "/")` (:359); `r = s.post(BASE_URL + "/login/checkLogin", data={"username": encode(cfg["email"]), "password": encode(cfg["password"])})` (:360-363); if `r.url` lacks `checkOtp` → `is_logged_in` check (:365) or RuntimeError (:369); parse hidden fields from the OTP page (:373-378); stash `pending_login.json` with cookies + `otp_fields` (:381-387).
+- **`is_logged_in` current code** (`padel_booking.py:317-321`): `r = s.get(f"{BASE_URL}/asset/assetbooking/{cfg['asset_booking_id']}", allow_redirects=True)`; `return r.status_code == 200 and "/login" not in r.url.lower()`. **New**: `r = _timed("GET", f"{BASE_URL}/dashboard/index", lambda: s.get(f"{BASE_URL}/dashboard/index", allow_redirects=True))`; same return expression. Call sites (all keep the `(s, cfg)` signature): `login_start:365`, `login_finish:418`, `get_authenticated_session:437`, `cmd_login_status:465`, `padel_telegram.py:652` (`/status`).
+- **`_timed` / `set_http_log`** (`padel_booking.py:249-278`): `_http_log` is a module global (default `None`); `set_http_log(fn)` assigns it; `_timed(method, url, call)` times zero-arg `call()`; on success logs `[http] {method} {url} -> {status} in {dt:.2f}s`, on exception logs `[http] {method} {url} FAILED after {dt:.2f}s: {e}` and re-raises. **Currently has zero call sites and `set_http_log` is never called** (verified by search) — this task activates them. `ts_prefix()` exists in `padel_booking.py` (imported by `padel_telegram.py:36`). Wire in `main()` (`padel_booking.py:2209-2251`) right after `cfg = load_config()` (:2218): `set_http_log(lambda m: print(f"{ts_prefix()} {m}", flush=True))` plus `print(f"[start] portal={BASE_URL} session timeout={PORTAL_TIMEOUT}s", flush=True)`.
+- **Wrapping pattern** (lambda over the exact existing call, keep all args identical — do not add/alter headers or cookies in this task): `r2 = _timed("POST", BASE_URL + "/login/verifyOtp", lambda: s.post(BASE_URL + "/login/verifyOtp", data={"user_otp": otp, **otp_fields}))`; `r = _timed("POST", BASE_URL + "/login/checkLogin", lambda: s.post(BASE_URL + "/login/checkLogin", data={"username": encode(cfg["email"]), "password": encode(cfg["password"])}))`; `s.get(target)` becomes `_timed("GET", target, lambda: s.get(target, allow_redirects=True))`; `s.get(BASE_URL + "/")` → `_timed("GET", BASE_URL + "/", lambda: s.get(BASE_URL + "/"))`.
+- **Constants**: `PORTAL_TIMEOUT = 90` at `padel_booking.py:83` (T6); `new_session(restore)` at :155-167 → `requests.Session(impersonate="chrome", timeout=PORTAL_TIMEOUT)`; `MYBOOKINGS_TIMEOUT = PORTAL_TIMEOUT` at :1076. `BASE_URL = "https://myportal.asteco.com"`.
+- **What NOT to do in this task**: no header changes on `verifyOtp`, no cookie/session handling changes, no Google Calendar/Telegram/autobook timeout changes. Header replication is follow-up T8, conditional on the instrumented log + the user's DevTools headers.
+- **Verification**: `python -m py_compile padel_booking.py padel_telegram.py`; `python -c "from padel_booking import new_session; print(new_session(restore=False).timeout)"` → `90`; live `python padel_booking.py login-status` (one read-only GET `/dashboard/index` with the saved session; expect a `[http] GET .../dashboard/index -> 200 in X.XXs` line and `Session valid: True`). `config.json`/`session.json` exist in the repo dir (chmod 600) so the live check can run locally.
+- **Deploy**: PR from `fix/ai-login-diag-dashboard-check` → merge to `main` → `.github/workflows/docker-publish.yml` rebuilds `hecbr/padel-booking-alrayyana` (latest + SHA) → user runs `docker compose pull && docker compose up -d` on the production host (entrypoint re-syncs `.py` on start) → next `/login` produces the `[http]` lines that identify the silently-dropped request.
+
+---
+
 ## Task T6: Raise portal-wide session timeout to 90s
+
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 08-10-2026 01:47:09

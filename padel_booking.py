@@ -315,9 +315,18 @@ def encode(value: str) -> str:
 
 
 def is_logged_in(s: requests.Session, cfg: dict) -> bool:
-    """Return True if the current session can reach the booking page."""
-    r = s.get(f"{BASE_URL}/asset/assetbooking/{cfg['asset_booking_id']}",
-              allow_redirects=True)
+    """Return True if the current session is still authenticated.
+
+    Checks the same page the portal itself lands on after a successful
+    login (``GET /dashboard/index``): an authenticated session gets a 200,
+    an expired one is redirected back to ``/login``. This is faster and
+    more direct than the old booking-page probe
+    (``/asset/assetbooking/{id}``) and mirrors what the browser does.
+    ``cfg`` is kept in the signature for call-site compatibility.
+    """
+    url = f"{BASE_URL}/dashboard/index"
+    r = _timed("GET", url,
+               lambda: s.get(url, allow_redirects=True))
     return r.status_code == 200 and "/login" not in r.url.lower()
 
 
@@ -356,11 +365,14 @@ def login_start(cfg: dict) -> None:
     s = new_session(restore=False)
 
     # checkLogin -> redirects to /login/checkOtp (OTP emailed)
-    s.get(BASE_URL + "/")
-    r = s.post(BASE_URL + "/login/checkLogin", data={
-        "username": encode(cfg["email"]),
-        "password": encode(cfg["password"]),
-    })
+    # (each step goes through _timed so the log shows exactly which
+    # request hangs or fails — see the _http_log wiring in main())
+    _timed("GET", BASE_URL + "/", lambda: s.get(BASE_URL + "/"))
+    r = _timed("POST", BASE_URL + "/login/checkLogin",
+               lambda: s.post(BASE_URL + "/login/checkLogin", data={
+                   "username": encode(cfg["email"]),
+                   "password": encode(cfg["password"]),
+               }))
     if "checkOtp" not in r.url:
         if is_logged_in(s, cfg):
             save_session(s)
@@ -403,8 +415,9 @@ def login_finish(cfg: dict, otp: str) -> requests.Session:
     otp_fields = state["otp_fields"]
 
     # verifyOtp (AJAX) -> returns redirect URL, or '2' (expired) / '3' (invalid)
-    r2 = s.post(BASE_URL + "/login/verifyOtp",
-                data={"user_otp": otp, **otp_fields})
+    r2 = _timed("POST", BASE_URL + "/login/verifyOtp",
+                lambda: s.post(BASE_URL + "/login/verifyOtp",
+                               data={"user_otp": otp, **otp_fields}))
     resp = r2.text.strip()
     if resp == "2":
         raise RuntimeError("OTP expired. Run 'login-start' to get a fresh OTP.")
@@ -413,7 +426,7 @@ def login_finish(cfg: dict, otp: str) -> requests.Session:
 
     # follow the redirect to establish the session
     target = resp if resp.startswith("http") else BASE_URL + resp
-    s.get(target, allow_redirects=True)
+    _timed("GET", target, lambda: s.get(target, allow_redirects=True))
 
     if not is_logged_in(s, cfg):
         raise RuntimeError("OTP accepted but session still not authenticated.")
@@ -2215,6 +2228,13 @@ def main() -> None:
     if len(sys.argv) < 2 or sys.argv[1] not in commands:
         print(__doc__)
         sys.exit(1)
+    # Per-request timing for every portal call (login, session check, ...):
+    # `[http] GET https://... -> 200 in 1.32s` / `... FAILED after 90.02s: ...`
+    set_http_log(lambda m: print(f"{ts_prefix()} {m}", flush=True))
+    # Confirms which timeout the deployed image actually uses (was the T6 fix
+    # picked up by this container?).
+    print(f"{ts_prefix()} [start] portal={BASE_URL} "
+          f"session timeout={PORTAL_TIMEOUT}s", flush=True)
     cfg = load_config()
     cmd = sys.argv[1]
     args = sys.argv[2:]

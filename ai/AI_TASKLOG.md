@@ -4,30 +4,30 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 11-10-2026 15:50:19 | [T7: Diagnose OTP login hang; session check via /dashboard](#task-t7-diagnose-otp-login-hang-session-check-via-dashboard) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 1/10 | 0m | none |
 | 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m | none |
 | 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m | none |
 | 10-04-2026 15:10:00 | [T3: Install nano in Docker image](#task-t3-install-nano-in-docker-image) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 5m | none |
 
-> ✅ **6 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **7 completed task(s)** — [View completed tasks](#completed-tasks)
 
 ---
 
 ## Task T7: Diagnose OTP login hang; session check via /dashboard
-- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 11-10-2026 15:50:19
-- **Last Updated**: 11-10-2026 15:50:19
-- **Time Spent**: 0m
+- **Last Updated**: 11-10-2026 16:07:06
+- **Time Spent**: 17m
 - **Branch**: [`fix/ai-login-diag-dashboard-check`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-login-diag-dashboard-check)
-- **Commit(s)**: pending
+- **Commit(s)**: [14eb5e2](https://github.com/HectorBravo/padel_booking_alrayyana/commit/14eb5e2ede7fe503c27edf90ed2140d1c5fbebaf) (code) · [2434815](https://github.com/HectorBravo/padel_booking_alrayyana/commit/2434815) (PR #6 merge)
 - **Blockers**: none
 - **Findings & Notes**:
   - **Symptom (user report)**: a manual browser login takes 3-4 s total (`/login/checkLogin` → `/login/checkOtp` → `verifyOtp` → `/dashboard/index`), yet the bot keeps failing with `Login failed: Failed to perform, curl: (28) Operation timed out after 90xxx ms **with 0 bytes received**` (message comes from `padel_telegram.py:414`, the OTP-reply handler wrapping `login_finish`).
   - **Key insight**: `0 bytes received` = the portal **never answered** that request at all — it is a silent drop (WAF/Akamai blackhole), not slowness. That is why T6's 90 s default only delays the same failure.
   - **Why the browser works and the bot doesn't**: the bot's `login_finish` (`padel_booking.py:393-429`) builds a **fresh** session (`new_session(restore=False)` at :401 — new TLS/HTTP2 fingerprint vs the `login_start` connection) and POSTs `/login/verifyOtp` (:406) with **no `Referer` header**, then GETs the redirect target (:416). The browser does the same steps over the *same already-validated connection* with `Referer: .../login/checkOtp`. The OTP email arriving proves `checkLogin`+`checkOtp` succeed from the bot; the suspect is the `verifyOtp` POST (or the redirect GET) on the new connection.
   - **Changes in this task**: (1) `is_logged_in()` now checks `GET /dashboard/index` directly (same criterion: `200` and final URL without `/login`) instead of `GET /asset/assetbooking/{id}` — per user instruction, mirrors the browser flow, faster; (2) every request of `login_start` / `login_finish` / `is_logged_in` is wrapped in the **existing but previously uncalled** `_timed()` (`padel_booking.py:264`) so the production log records each step (`[http] POST /login/verifyOtp -> 200 in 1.3s` or `FAILED after 90.02s: ...`); (3) `set_http_log` is wired in `main()` and the startup line prints the active `PORTAL_TIMEOUT` (confirms the deployed image value).
-  - **Next if the hang persists after deploy**: replicate the browser's `verifyOtp` request headers (Referer/Origin/Accept/X-Requested-With) from the user's DevTools capture (planned T8).
+  - **Verified live** (dev machine, `python padel_booking.py login-status`): startup line `[start] portal=https://myportal.asteco.com session timeout=90s`; per-request line `[http] GET https://myportal.asteco.com/dashboard/index -> 200 in 7.41s`; `Session valid: False` = correct (the saved dev session was expired → portal redirected to `/login`, exactly what the new check detects). `py_compile` clean on both files; `new_session(restore=False).timeout == 90`.
+  - **Next if the hang persists after deploy**: replicate the browser's `verifyOtp` request headers (Referer/Origin/Accept/X-Requested-With) from the user's DevTools capture (planned T8). The new `[http]` lines will show which request returns `0 bytes`.
 
 ### User Confirmations
 
@@ -43,13 +43,13 @@
 ### Subtasks / Plan
 
 - [x] Record T7 in `ai/AI_TASKLOG.md` before touching code (dedicated `docs(ai):` commit on `main`)
-- [ ] `is_logged_in()` → `GET /dashboard/index` (keep `(s, cfg)` signature; same `/login`-redirect criterion)
-- [ ] Instrument `login_start` (GET /, POST /login/checkLogin), `login_finish` (POST /login/verifyOtp, GET redirect target) and `is_logged_in` via `_timed()`
-- [ ] Wire `set_http_log` in `main()` (all commands incl. `telegram`) + print active `PORTAL_TIMEOUT` at startup
-- [ ] Verify: `py_compile` both files, `new_session().timeout == 90`, one live `login-status` (single read-only GET to the portal with saved cookies)
-- [ ] Code commit on `fix/ai-login-diag-dashboard-check` + push to origin
-- [ ] Open PR, merge to `main`, confirm the `Build and Push Docker Image` workflow run succeeds
-- [ ] Final log commit on `main` (status `done`, real hashes) + fast-forward the AI branch + re-push
+- [x] `is_logged_in()` → `GET /dashboard/index` (keep `(s, cfg)` signature; same `/login`-redirect criterion)
+- [x] Instrument `login_start` (GET /, POST /login/checkLogin), `login_finish` (POST /login/verifyOtp, GET redirect target) and `is_logged_in` via `_timed()`
+- [x] Wire `set_http_log` in `main()` (all commands incl. `telegram`) + print active `PORTAL_TIMEOUT` at startup
+- [x] Verify: `py_compile` both files, `new_session().timeout == 90`, one live `login-status` (single read-only GET to the portal with saved cookies)
+- [x] Code commit on `fix/ai-login-diag-dashboard-check` + push to origin (`14eb5e2`)
+- [x] Open PR #6, merge to `main` (`2434815`), confirm the `Build and Push Docker Image` workflow run succeeds (run `38137811315`)
+- [x] Final log commit on `main` (status `done`, real hashes) + fast-forward the AI branch + re-push
 - [ ] (user) Production host: `docker compose pull && docker compose up -d`; check the `[http]` lines of the next login
 - [ ] (user, if login still fails) Provide DevTools `verifyOtp` headers → follow-up fix (T8)
 
@@ -335,6 +335,7 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
+| 11-10-2026 15:50:19 | [T7: Diagnose OTP login hang; session check via /dashboard](#task-t7-diagnose-otp-login-hang-session-check-via-dashboard) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 8/10 | 17m |
 | 08-10-2026 01:47:09 | [T6: Raise portal-wide session timeout to 90s](#task-t6-raise-portal-wide-session-timeout-to-90s) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 10m |
 | 08-10-2026 00:27:49 | [T5: Increase mybookings timeout to 90s](#task-t5-increase-mybookings-timeout-to-90s) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/5 | 6m |
 | 05-10-2026 22:49:53 | [T4: Make Google Calendar sync non-fatal](#task-t4-make-google-calendar-sync-non-fatal) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 3/3 | 5m |

@@ -44,7 +44,8 @@
 **Confirmed (user provided):**
 
 - (09-11-2026 00:41:06) "bookable days should be obtained from the portal itself … the dates selectable from the 'Check in date' at `/asset/assetbooking/370`" → bookability comes from the portal page, not `booking_open_hour`/+6 arithmetic.
-- (09-11-2026 00:41:06) "whenever the booking window is not open, refresh every 2 minutes until success … if the day is bookable and the slot is available, stop and indicate it; if the day is not bookable, stop as of now" → tri-state: BOOK (stop) / WAIT 2 min (offered, no slot yet) / NOT BOOKABLE (stop now).
+- (09-11-2026 00:41:06) "whenever the booking window is not open, refresh every 2 minutes until success … if the day is bookable and the slot is available, stop and indicate it; if the day is not bookable, stop as of now" → tri-state: BOOK (stop) / WAIT 2 min / NOT BOOKABLE (stop now).
+- (09-11-2026 01:10:00) "If I start the program and the booking window is not yet open for the target days, it should also go into the same process to try to book with the same interval until success … the booking window is 7 days, but the portal might not report all days bookable from the dropdown. In those cases it should keep trying" → REFINES the "not bookable" stop: the **7-day rolling window (today .. today+6) is the hard limit**. A target day INSIDE it that the dropdown does not offer yet means "not open yet" → keep refreshing every 2 min until it opens AND the slot is free, including at startup. Only a day OUTSIDE the 7-day window stops as of now.
 
 ### Subtasks / Plan
 
@@ -60,6 +61,17 @@
 - [x] `run_autobook_loop` — trigger 3 becomes "a new date appeared in the portal's window" (no `today+6`, no `booking_open_hour`)
 - [x] `padel_telegram.py` — `_show_date_keyboard` builds buttons from portal dates; `_show_slots` refuses non-bookable dates; `_do_book` says "portal window only goes to X" on failure; new `/window` command
 - [x] Docs: README.md, TELEGRAM.md, config.sample.json, module docstrings (new `slot_retry_minutes`, `booking_max_wait_minutes`)
+
+**Follow-up (clarification 09-11-2026 01:10 — 7-day window is the hard limit):**
+
+- [ ] `booking_window_days` config (default 7) + `rolling_window_dates()` = today .. today+days-1, the hard "can ever be booked now" limit
+- [ ] `bookable_targets` — candidacy = each target weekday's occurrence INSIDE the 7-day window; the dropdown only orders them (already-open first, not-yet-open kept so they get waited for)
+- [ ] `run_booking_race` — new outcome `not_yet_open`: day inside the window but the dropdown has not opened it → keep refreshing every 2 min (never book from the unvalidated slot endpoint); `outside_window` = day beyond the 7-day window → stop as of now
+- [ ] Startup / trigger (1) must enter the same wait process for not-yet-open target days (previously they were filtered out and never attempted)
+- [ ] Messages split honestly: "outside the 7-day window — cannot be booked now" vs "in the window, the portal has not opened this date yet — waiting every 2 min"
+- [ ] Manual paths (`cmd_book`, `cmd_slots`, `_show_slots`, `_on_autobook`) explain the same split (they still refuse, a manual submit would be rejected)
+- [ ] Docs: `booking_window_days` + reworded window explanation
+- [ ] Harness extended: in-window-but-not-yet-offered keeps refreshing and books once the dropdown opens + slot is free; outside-window stops immediately
 
 ### Full Context Notes for AI Agents
 

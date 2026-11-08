@@ -21,7 +21,7 @@
 - **Last Updated**: 09-11-2026 01:14:00
 - **Time Spent**: 25m
 - **Branch**: [`fix/ai-portal-bookable-dates`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-portal-bookable-dates)
-- **Commit(s)**: pending (code commit on the AI branch; the two `docs(ai):` commits are the log ones on `main`)
+- **Commit(s)**: code [fefb096](https://github.com/HectorBravo/padel_booking_alrayyana/commit/fefb0964aef88a0168f7f44bd9a82eb5ea0bee63) (round 1 — portal-derived dates, 2-min refresh) and [9d0d2c4](https://github.com/HectorBravo/padel_booking_alrayyana/commit/9d0d2c48c033b8a0d54689ef27f90297d1a2c2fc) (round 2 — 7-day hard limit, wait-until-open), both on the AI branch · log [535741a](https://github.com/HectorBravo/padel_booking_alrayyana/commit/535741a03f5f682ba486fde7efbd3f9801c93c79), [db36422](https://github.com/HectorBravo/padel_booking_alrayyana/commit/db364228038f815f886c53fb8ba7267950bcaa2e), [1b7311b](https://github.com/HectorBravo/padel_booking_alrayyana/commit/1b7311b), [5c53bae](https://github.com/HectorBravo/padel_booking_alrayyana/commit/5c53bae) on `main` and [bf6d822](https://github.com/HectorBravo/padel_booking_alrayyana/commit/bf6d822) on the AI branch — **not yet merged** (see the pending merge note)
 - **Blockers**: none
 - **Findings & Notes**:
   - **Symptom (user report, 09-11-2026)**: the portal's "Check in date" dropdown at `/asset/assetbooking/370` only offers dates up to **14 Nov 2026**, but the Telegram bot offers **15 Nov** and the booking then fails.
@@ -44,6 +44,7 @@
 
 - [ ] (09-11-2026 00:55:00) Exact markup of the portal's date picker — is "Check in date" a `<select name="check_in_date">` with `<option value="Nov 15, 2026">`? A saved `booking_page.html` or the DevTools `outerHTML` pins the parser; it is currently structure-agnostic and format-tolerant.
 - [ ] (09-11-2026 00:55:00) Retry defaults `slot_retry_minutes = 2` (per instruction) and `booking_max_wait_minutes = 360` cap — confirm the 6h bound is acceptable (it only prevents an endless loop).
+- [ ] (09-11-2026 01:14:00) Merge `fix/ai-portal-bookable-dates` (tip `9d0d2c4`) into `main` — until it is merged the code is only on the AI branch, so T9 stays `in_progress` and its `tree/fix/ai-portal-bookable-dates` badge 404s once the branch is deleted.
 
 **Confirmed (user provided):**
 

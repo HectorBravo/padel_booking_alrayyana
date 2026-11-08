@@ -18,10 +18,10 @@
 - **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 09-11-2026 00:41:06
-- **Last Updated**: 09-11-2026 00:57:00
-- **Time Spent**: 16m
+- **Last Updated**: 09-11-2026 01:00:00
+- **Time Spent**: 19m
 - **Branch**: [`fix/ai-portal-bookable-dates`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-portal-bookable-dates)
-- **Commit(s)**: pending (code commit on the AI branch; the two `docs(ai):` commits are the log ones on `main`)
+- **Commit(s)**: [fefb096](https://github.com/HectorBravo/padel_booking_alrayyana/commit/fefb0964aef88a0168f7f44bd9a82eb5ea0bee63) (code, on the AI branch, pushed — 5 files, +627/−202) · log commits [535741a](https://github.com/HectorBravo/padel_booking_alrayyana/commit/535741a03f5f682ba486fde7efbd3f9801c93c79) (plan) and [db36422](https://github.com/HectorBravo/padel_booking_alrayyana/commit/db364228038f815f886c53fb8ba7267950bcaa2e) (subtasks) on `main`
 - **Blockers**: none
 - **Findings & Notes**:
   - **Symptom (user report, 09-11-2026)**: the portal's "Check in date" dropdown at `/asset/assetbooking/370` only offers dates up to **14 Nov 2026**, but the Telegram bot offers **15 Nov** and the booking then fails.
@@ -31,6 +31,8 @@
   - **Retry strategy (user instruction)**: refresh every **2 minutes** while the target day IS offered but its slots are not open/available yet; stop as soon as a preferred slot is bookable (book + report); stop **immediately** when the portal does not offer the day at all.
   - **Degraded mode kept on purpose**: a page with no parsable date `<select>` yields `[]` and callers fall back to the old arithmetic with a logged warning — a changed portal markup must never block booking.
   - **Not verified live**: `config.json` is gitignored/absent here, so no portal request is possible from this machine; verification = `py_compile` + synthetic-HTML harness. Real `<select>` markup still needs confirming (see pending item).
+  - **Verified (branch tip `fefb096`, archived to `/tmp/verify` and run there)**: `py_compile` clean for `padel_booking.py` and `padel_telegram.py`; a 17-check harness (date-picker fixtures + fallback path + tri-state race with the HTTP layer monkeypatched) passes fully — "window stops at 14 Nov", "15 Nov not offered → `not_bookable` immediately, no slot call", "offered day + free preferred slot → submitted and stop", "unit-code options (`09 01`) never parse as dates", "unknown window → no false refusal".
+  - **Parser bug found and fixed during verification**: `strptime("15-11", "%d-%m").year` is 1900, so year inference now anchors on `today.year` and only rolls forward when the date would land in the past.
 
 ### User Confirmations
 
@@ -73,7 +75,8 @@
 - **Decision — the 2-minute refresh lives inside the race**, not in the scheduler: `slot_retry_minutes` (default 2) replaces the hardcoded `time.sleep(30)` at :1775-1778; `booking_max_wait_minutes` (default 360) bounds the loop; each iteration re-reads `portal_bookable_dates` so a day that stops being offered exits immediately ("not bookable → stop as of now").
 - **Trigger 3 redesign**: replace "new calendar day ⇒ book today+6" with "diff the portal's bookable-date set against the last seen set; for each newly offered target weekday, run the race". Kills the `booking_open_hour` dependency and stays correct when the window is 6 days instead of 7.
 - **Parser tolerance requirement (no live sample)**: prefer `select` whose `name`/`id` contains `check_in_date`; else scan every `<select>` and keep the one with the most date-like options. Accept option `value` AND option text in `%b %d, %Y`, `%d %b %Y`, `%d %B %Y`, `%d/%m/%Y`, `%d-%m-%Y`, `%Y-%m-%d`, plus day/month-only with year inference. Ignore non-date options (weekday headers, "Today", …).
-- **Current state**: no code changed yet (log written first per the repo's git rules). **Next**: subtask 1 on branch `fix/ai-portal-bookable-dates` → parser, then call-site rewiring, then `py_compile` + `/tmp` harness.
+- **Current state**: code COMPLETE and pushed — `fix/ai-portal-bookable-dates` @ `fefb096` (upstream set, `git branch -vv` shows `[origin/fix/ai-portal-bookable-dates]`), `main` @ `db36422` (log-only, clean tree). Harness + `py_compile` pass against the archived branch tip. **Next**: the user opens/merges the PR (link: `https://github.com/HectorBravo/padel_booking_alrayyana/pull/new/fix/ai-portal-bookable-dates`); after that, the final `done` log commit goes on `main` as the next commit after the merge, then `git merge --ff-only origin/main` + `--force-with-lease` re-push on the AI branch.
+- **Git mishap recorded (so a resume does not repeat it)**: a `git checkout` in the same `run_commands` batch as the commit hit a stale `.git/index.lock`, so the code commit first landed on `main` locally (`fefb096` before `db36422`). It was moved with `git branch -f fix/ai-portal-bookable-dates fefb096` → push → `git checkout main && git reset --hard db36422`. Nothing was ever pushed to `origin/main` with code (verified: `git ls-remote` shows `origin/main` = `db36422`).
 - **Git flow (rules)**: log-first `docs(ai):` on `main` (done), AI branch `fix/ai-portal-bookable-dates` pushed with `-u`, code commit `fix(booking): [ai] …`, never push code to `main` (only `ai/AI_TASKLOG.md` is allowed); final `done` log commit on `main` AFTER the user merges, then `git merge --ff-only origin/main` + `--force-with-lease` re-push of the AI branch.
 - **Environment gotcha**: `run_commands` runs the commands of one call **concurrently**, so never read git/file state in the same call that mutates it (it already bit the previous task).
 

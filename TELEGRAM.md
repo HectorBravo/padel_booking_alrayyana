@@ -8,9 +8,11 @@ booking automation. Once it's done, you get:
 - **OTP login from your phone** — the bot triggers the portal's OTP email and
   asks you for the 6-digit code right in the chat.
 - **Background autobooking** — while the bot runs it books your preferred
-  slot automatically when the window opens, and messages you with the result
-  (✅ BOOKED / ❌ FAILED / no slot). Toggle it with /startautobook and
-  /stopautobook.
+  slot automatically as soon as the portal opens that date **and** a slot is
+  free, refreshing the portal every 2 minutes (`slot_retry_minutes`) while a
+  date inside the 7-day window is not open yet, and messages you with the result
+  (✅ BOOKED / ❌ FAILED / no slot / ⏳ not opened yet / 🚫 outside the window).
+  Toggle it with /startautobook and /stopautobook.
 - **Automatic re-login** — if the keep-alive detects the session has
   expired, the bot triggers a new OTP email itself, asks you for the code in
   Telegram, completes the login, verifies the session, and confirms
@@ -101,7 +103,7 @@ terminal. Open your bot in Telegram and send `/start`.
 | `/login` | Start a fresh OTP login — the bot emails the OTP, you reply with the code in chat |
 | `/status` | Check whether the saved portal session is still valid |
 | `/slots [date]` | List free slots for a date (or tap a date button) |
-| `/window` | Show the days the portal currently lets you book (its "Check in date" picker) |
+| `/window` | Show the 7-day rolling window **and** which of those days the portal has opened (its "Check in date" picker) |
 | `/book` | Pick a date, then a slot, to book (with confirm button) |
 | `/mybookings` | List your portal bookings, with cancel buttons |
 | `/autobook [date]` | Book your best preferred slot for a date (default: the last day the portal offers) |
@@ -114,8 +116,9 @@ Dates accept `YYYY-MM-DD`, `DD/MM/YYYY` or `DD-MM-YYYY`.
 **The `/book` flow, step by step:**
 
 1. Send `/book` — the bot replies with one button per day **that the portal
-   actually offers** (its "Check in date" picker, usually today .. today+5/6
-   — `/window` prints the live list). **Tap a date.**
+   actually offers** (its "Check in date" picker — usually fewer than the full
+   7-day window; `/window` prints the live view, marking the dates inside the
+   window that are **not open yet**). **Tap a date.**
 2. The bot lists the free slots for that day as buttons. **Tap a slot.**
 3. The bot asks "Book 20:00-21:00 on Fri 26 Sep?" — tap **✅ Yes, book**
    (or **❌ No** to abort).
@@ -157,15 +160,24 @@ python padel_booking.py telegram
 
 While it runs, the bot:
 
-- **Books your preferred slot automatically** — it reads the days the portal
-  offers (the "Check in date" picker) instead of assuming `today + 6`, so a
-  date the portal has not opened is never attempted. When the portal starts
-  offering a new date that is one of your `preferred_slots` days, it waits for
-  that day's slots, **refreshing the portal every `slot_retry_minutes`
-  (default 2 min)**, and books the first free preferred slot as soon as one is
-  free. If the day is offered but no preferred slot ever frees up it stops at
-  `booking_max_wait_minutes` and notifies you; if the portal does not offer
-  that day at all it stops immediately (ℹ️ notification).
+- **Books your preferred slot automatically** — two facts drive it and are
+  kept apart: the portal's window is **7 days wide** (`booking_window_days`:
+  today .. today+6, the hard limit), and its "Check in date" picker says which
+  of those days are **open**. For each of your `preferred_slots` weekdays the
+  bot takes the occurrence inside the 7-day window and attempts it, freshest
+  opened date first:
+    * date opened by the picker, slot free → **✅ BOOKED and it stops**;
+    * date opened but no preferred slot free → **refreshes the portal every
+      `slot_retry_minutes` (default 2 min)** until one is free;
+    * date **inside the window but not in the picker yet** → NOT skipped, the
+      same 2-minute refresh keeps running until the portal opens it **and** a
+      slot is free — so starting the program while the target day is still
+      closed enters that wait straight away;
+    * date **beyond the 7-day window** → stops immediately (🚫), waiting could
+      never succeed.
+  Each attempt is bounded by `booking_max_wait_minutes` (default 360 = 6h) and
+  the session is refreshed before every refresh, so hours-long waits stay
+  alive.
 - **Alerts you when the session expires** (keep-alive failure) — so you know
   before a booking attempt fails.
 - **Re-logs in automatically**: it requests a new OTP email itself, asks you

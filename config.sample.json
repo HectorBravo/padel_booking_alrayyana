@@ -11,6 +11,7 @@
   "min_start_hour": "18:00",
   "description": "Padel booking",
   "keepalive_minutes": 20,
+  "booking_window_days": 7,
   "booking_open_hour": 0,
   "slot_retry_minutes": 2,
   "booking_max_wait_minutes": 360,

@@ -24,8 +24,9 @@ Usage:
   python3 padel_booking.py book 2026-09-26 "18:00-19:00" [description] [--verbose]
   python3 padel_booking.py pick                    # interactive: browse all
   python3 padel_booking.py pick --from 18:00       #   ...highlight 6pm+ slots green
-                                                   # available slots (today ->
-                                                   # today+6) and choose one
+                                                   # available slots (the
+                                                   # portal's 7-day window) and
+                                                   # choose one
   python3 padel_booking.py mybookings             # list your portal bookings
   python3 padel_booking.py mybookings 2026-09-26  #   ...for one date
   python3 padel_booking.py cancel                 # interactive: pick one to
@@ -38,20 +39,22 @@ Usage:
                                                     # autobooking scheduler)
 
 Auto-booking (runs inside the Telegram bot):
-  The bookable days come FROM THE PORTAL: the booking page lists them in its
-  "Check in date" <select>, and a date that is not listed cannot be booked
-  (the POST is rejected), even though the slot endpoint still answers for it.
-  The scheduler therefore attempts only the days that page offers, so it never
-  books a date the portal has not opened yet (e.g. it stops at today+5 while
-  the old assumption was today+6). While `python3 padel_booking.py telegram`
-  is running, a background scheduler books your target weekdays using that
-  day's preferred slots in priority order; when a day is offered but its slots
-  are not open/free yet it refreshes the portal every slot_retry_minutes
-  (default 2 min) until a slot can be booked, and stops immediately when the
-  portal does not offer that day at all. It keeps the session alive
-  periodically and pushes Telegram notifications (booked / failed / no slot /
-  not bookable / OTP re-login needed). Start or stop it at any time with
-  /startautobook and /stopautobook.
+  Two facts drive it and must not be conflated. The portal's booking window is
+  always 7 days wide (today .. today+6, config key booking_window_days) and is
+  the HARD limit of what can be booked now. Which of those days are OPEN comes
+  from the booking page itself: its "Check in date" <select> lists them, and a
+  date that is not listed cannot be booked right now (the POST is rejected),
+  even though the slot endpoint still answers for it. The scheduler therefore
+  attempts every desired weekday whose date is inside the 7-day window: the
+  dates the picker already offers first (freshest first), then the dates inside
+  the window that the picker has not opened yet, which are NOT skipped - each
+  one refreshes the portal every slot_retry_minutes (default 2 min) until the
+  portal lists it AND a preferred slot is free, so a program started while the
+  target day is still closed enters the same wait. Only a date beyond the 7-day
+  window stops immediately, since waiting for it could never succeed. It keeps
+  the session alive periodically and pushes Telegram notifications (booked /
+  failed / no slot / not opened yet / outside window / OTP re-login needed).
+  Start or stop it at any time with /startautobook and /stopautobook.
   All bot settings live in config.json (preferred_slots, slot_retry_minutes,
   booking_max_wait_minutes, keepalive_minutes, description).
   'preferred_slots' is a per-day map; its keys are the days to auto-book, e.g.
@@ -810,14 +813,46 @@ def portal_bookable_dates(cfg: dict, force: bool = False) -> list:
     return dates
 
 
-def _arithmetic_window(now, days: int = 7) -> list:
-    """Fallback window: ``days`` consecutive dates starting today.
+# The 7-day rolling window and the "Check in date" picker are NOT the same
+# thing, and conflating them is what caused a date to be offered and then
+# rejected. The window is always 7 days wide (today .. today+6); the picker
+# says which of those days the portal has opened so far. Therefore:
+#   * a day OUTSIDE the window can never be booked now  -> stop, never wait;
+#   * a day INSIDE it that the picker omits is just not open yet -> keep
+#     refreshing (the window slides forward) until it opens and a slot is free.
+BOOKING_WINDOW_DAYS = 7        # default window width, config: booking_window_days
 
-    Used ONLY when the portal page gives no parsable date picker, so a change
-    in the portal markup cannot silently disable booking.
+
+def booking_window_days(cfg: dict) -> int:
+    """Width of the portal's rolling window in days (default 7)."""
+    try:
+        days = int(cfg.get("booking_window_days", BOOKING_WINDOW_DAYS))
+    except (TypeError, ValueError):
+        return BOOKING_WINDOW_DAYS
+    return max(1, days)
+
+
+def rolling_window_dates(now, days: int = 7) -> list:
+    """The portal's rolling window: ``days`` consecutive dates from today.
+
+    This is the HARD limit of what can be booked right now; it doubles as the
+    fallback view for callers that could not read the picker.
     """
     today = now.date() if isinstance(now, datetime) else now
-    return [today + timedelta(days=i) for i in range(days)]
+    return [today + timedelta(days=i) for i in range(max(1, days))]
+
+
+def window_limit(cfg: dict, now) -> tuple:
+    """``(first, last)`` date of the rolling window — the hard bookable bounds."""
+    dates = rolling_window_dates(now, booking_window_days(cfg))
+    return dates[0], dates[-1]
+
+
+def in_booking_window(cfg: dict, day, now) -> bool:
+    """True when *day* lies inside the portal's rolling window right now."""
+    day = day.date() if isinstance(day, datetime) else day
+    first, last = window_limit(cfg, now)
+    return first <= day <= last
 
 
 def window_label(dates: list) -> str:
@@ -874,7 +909,7 @@ def count_active_bookings(target_date) -> int:
     """
     today = datetime.now().date()
     window_start = today
-    window_end = today + timedelta(days=6)
+    window_end = today + timedelta(days=BOOKING_WINDOW_DAYS - 1)
     count = 0
     for b in _STATE["bookings"]:
         if b.get("from_dt") is None or is_cancelled(b):
@@ -1028,12 +1063,17 @@ def cmd_window(cfg: dict, _args: list) -> None:
               "today..today+6 window.")
         sys.exit(1)
     today = datetime.now().date()
-    print(f"Portal bookable window: {window_label(dates)} "
-          f"({len(dates)} days)")
-    for d in dates:
+    days = booking_window_days(cfg)
+    first, last = window_limit(cfg, datetime.now())
+    print(f"Portal rolling window: {first:%a %d %b} .. {last:%a %d %b %Y} "
+          f"({days} days)")
+    print(f"Opened by 'Check in date': {window_label(dates)} "
+          f"({len(dates)} of {days} days)")
+    for d in rolling_window_dates(datetime.now(), days):
         offset = (d - today).days
         marker = "today" if offset == 0 else f"in {offset} day(s)"
-        print(f"  {d:%a %d %b %Y}   ({marker})")
+        state = "bookable" if d in dates else "NOT OPEN YET"
+        print(f"  {d:%a %d %b %Y}   ({marker})   {state}")
 
 
 def cmd_slots(cfg: dict, args: list) -> None:
@@ -1055,15 +1095,21 @@ def cmd_slots(cfg: dict, args: list) -> None:
           f"{cfg.get('attendees', 1)} attendees)")
     if min_start:
         print(f"  (filtered: from {min_start} onwards)")
-    if offered and want_date not in offered:
-        # The slot endpoint answers for dates outside the window, but the
-        # booking POST would be rejected — say so instead of letting the user
-        # find out at submit time.
-        print(f"  ⚠️ {want_date:%a %d %b %Y} is NOT in the portal's "
-              f"'Check in date' list — it cannot be booked right now.")
-        note = bookable_window_note(cfg).strip()
-        if note:
-            print(f"  {note}")
+    first, last = window_limit(cfg, datetime.now())
+    if want_date < first or want_date > last:
+        # Outside the rolling window: no slot endpoint answer can ever be
+        # booked, the form has no option for such a date.
+        print(f"  ⚠️ {want_date:%a %d %b %Y} is OUTSIDE the portal's "
+              f"{booking_window_days(cfg)}-day window "
+              f"({first:%a %d %b} .. {last:%a %d %b %Y}) — it cannot be "
+              f"booked at all right now.")
+    elif offered and want_date not in offered:
+        # Inside the window but the picker has not opened it yet: it becomes
+        # bookable when the window slides forward (autobook waits for that).
+        print(f"  ⚠️ {want_date:%a %d %b %Y} is inside the portal's window "
+              f"but its 'Check in date' does not offer it yet — the portal "
+              f"lists {window_label(offered)} ({len(offered)} of "
+              f"{booking_window_days(cfg)} days).")
     print("-" * 46)
     if not slots:
         if all_slots:
@@ -1099,13 +1145,18 @@ def cmd_book(cfg: dict, args: list) -> None:
         # get_booking_meta() below reports an expired session properly.
         offered = []
     want_date = parse_date(args[0]).date()
+    first, last = window_limit(cfg, datetime.now())
+    if want_date < first or want_date > last:
+        # Outside the rolling window: the booking form has no option for it.
+        sys.exit(f"NOT BOOKABLE AT ALL: {want_date:%a %d %b %Y} is outside "
+                 f"the portal's {booking_window_days(cfg)}-day window "
+                 f"({first:%a %d %b} .. {last:%a %d %b %Y}).")
     if offered and want_date not in offered:
-        # The portal's "Check in date" picker has no option for that day, so
-        # its POST would be rejected — refuse before wasting a submit.
-        note = bookable_window_note(cfg).strip()
-        sys.exit(f"NOT BOOKABLE: the portal does not offer "
-                 f"{want_date:%a %d %b %Y} in its 'Check in date' right now. "
-                 f"{note or 'Portal window unknown.'}")
+        # Inside the window but not opened yet: a manual submit now would be
+        # rejected, while autobooking waits 2 min at a time for that opening.
+        sys.exit(f"NOT OPEN YET: {want_date:%a %d %b %Y} is inside the "
+                 f"portal's window but its 'Check in date' does not offer "
+                 f"it; the portal lists {window_label(offered)}.")
 
     s, meta = get_booking_meta(cfg)
     slots = get_available_slots(s, cfg, api_date, meta)
@@ -1775,15 +1826,17 @@ def cmd_pick(cfg: dict, args: list) -> None:
 
     # The bookable window comes from the portal's "Check in date" picker; the
     # today..today+6 arithmetic is only the fallback for a page that gives no
-    # parsable picker (see _arithmetic_window).
+    # parsable picker (see rolling_window_dates).
     try:
         window_dates = portal_bookable_dates(cfg)
     except Exception:  # pylint: disable=broad-exception-caught
         window_dates = []
     if not window_dates:
-        window_dates = _arithmetic_window(datetime.now())
+        window_dates = rolling_window_dates(datetime.now(),
+                                            booking_window_days(cfg))
     print(f"Bookable window (from the portal): {window_label(window_dates)}"
-          f"   ({len(window_dates)} days, unit {meta.get('unit_label')})")
+          f"   ({len(window_dates)} of {booking_window_days(cfg)} days, "
+          f"unit {meta.get('unit_label')})")
     if min_start:
         print(f"  (green: slots from {min_start} onwards)")
     print("-" * 62)
@@ -1909,59 +1962,53 @@ def preferred_slots_for_day(cfg: dict, day_name: str) -> list:
     return list(slots)
 
 
-def bookable_targets(targets: set, now: datetime, open_hour: int,
-                     dates: list | None = None) -> list:
-    """The target days that can be booked right now.
+def bookable_targets(targets: set, now: datetime, dates: list | None = None,
+                     window_days: int = BOOKING_WINDOW_DAYS) -> list:
+    """The target days inside the portal's 7-day window, in attempt order.
 
-    ``dates`` is the window as the PORTAL defines it — the "Check in date"
-    <option> list from the booking page (``portal_bookable_dates``). When it is
-    supplied, a day is a candidate ONLY if the portal actually offers it, which
-    is what makes the bot stop offering/attempting dates such as 15 Nov while
-    the window ends on 14 Nov.
+    Candidacy is the HARD limit — the rolling window (today .. today+6). Every
+    target weekday has exactly one occurrence in it, and that day is a
+    candidate **whether or not** the "Check in date" picker lists it yet: a
+    target day the portal has not opened is not skipped, it is attempted
+    through ``run_booking_race``, which refreshes every ``slot_retry_minutes``
+    until the portal opens it. Days outside the window are not returned —
+    those can never be booked now and waiting for them would be pointless.
 
-    The weekday arithmetic below runs ONLY when no window is known (the page
-    gave no parsable date picker), so a portal markup change cannot silently
-    disable booking. It assumes the old rule: a day opens at ``open_hour`` six
-    days before it.
+    The picker only decides the ORDER:
 
-    Returns the candidate days, freshest first (the last date the portal offers
-    is the one it has just opened, so its slots are the least contested), then
-    the rest chronologically.
+      * days it already offers come first, freshest first (its last date is
+        the one that just opened, so its slots are the least contested);
+      * days inside the window that it does not list yet come last, nearest
+        first, so the day that will open soonest is waited for first.
 
-    Note: we deliberately do **not** filter by ``already_booked_successfully``
-    here — that notification belongs in ``book_day()`` so the user sees a
+    Note: ``already_booked_successfully`` is deliberately not filtered here —
+    that notification belongs in ``book_day()`` so the user sees one
     consistent message for every desired day.
     """
-    if dates:
-        # Authoritative: the portal's own "Check in date" option list.
-        result = [d for d in dates if d.weekday() in targets and d >= now.date()]
-    else:
-        result = []
-        today = now.date()
-        for target_weekday in sorted(targets):
-            # Find the next occurrence of this weekday
-            days_ahead = (target_weekday - today.weekday() + 7) % 7
-            # days_ahead == 0 means today itself is the target weekday.
-            # We keep it as 0 so candidate == today; the window check below
-            # will decide whether today's slots are available.
-            candidate = today + timedelta(days=days_ahead)
+    today = now.date()
+    window_days = max(1, int(window_days))
+    candidates = []
+    for target_weekday in sorted(targets):
+        days_ahead = (target_weekday - today.weekday() + 7) % 7
+        # One occurrence per weekday inside the window.
+        if days_ahead < window_days:
+            candidates.append(today + timedelta(days=days_ahead))
+    if not candidates:
+        return []
 
-            # Fallback only: the portal was assumed to open a day at
-            # ``open_hour`` on the day 6 days before it.
-            open_dt = datetime.combine(
-                candidate - timedelta(days=6),
-                datetime.min.time().replace(hour=open_hour))
-            if now >= open_dt:
-                result.append(candidate)
-    result.sort()  # Sort chronologically first
+    if not dates:
+        # Picker unreadable: freshest first, as the old arithmetic did.
+        freshest = max(candidates)
+        return [freshest] + sorted(d for d in candidates if d != freshest)
 
-    if not result:
-        return result
-
-    # Freshest first: the portal opened the LAST date it offers.
-    newest = result[-1]
-    others = [d for d in result if d != newest]
-    return [newest] + others
+    opened = [d for d in candidates if d in dates]
+    pending = sorted(d for d in candidates if d not in dates)
+    if not opened:
+        return pending
+    freshest = max(opened)
+    return ([freshest]
+            + sorted(d for d in opened if d != freshest)
+            + pending)
 
 
 def prefs_signature(cfg: dict) -> str:
@@ -1999,27 +2046,46 @@ def ts_prefix() -> str:
 def run_booking_race(cfg: dict, target: datetime, preferred: list,
                      wait_for_open: bool = True, timeout: int | None = None,
                      max_attempts: int | None = None, dry_run: bool = False,
-                     retry_minutes: int | None = None, stop=None):
+                     retry_minutes: int | None = None, stop=None,
+                     on_wait=None):
     """Poll the portal and book the best preferred slot when one is bookable.
 
-    The strategy asked for, expressed as a tri-state outcome:
-      * day offered by the portal AND a preferred slot free  -> book and STOP,
-        outcome ``"slot_found"``;
-      * day offered but its slots not open/free yet          -> refresh the
-        portal every ``slot_retry_minutes`` (default 2 min) and try again,
-        outcome ``"no_slot"`` once the cap is hit;
-      * the portal offers NO such day ("Check in date" has no option for it)
-        -> STOP immediately, outcome ``"not_bookable"``.
+    Two facts are read on every refresh and must NOT be conflated:
+
+      * the portal's rolling window (today .. today+6, ``booking_window_days``)
+        is the HARD limit — a day outside it can never be booked now, so the
+        race STOPS (``outside_window``) rather than waiting forever;
+      * the "Check in date" option list says which days INSIDE that window the
+        portal has opened so far. A target day that lies in the window but is
+        not listed yet is not a failure: the window simply has not slid to it,
+        so the race keeps refreshing every ``slot_retry_minutes`` (default 2
+        min) until the portal lists the day AND a preferred slot is free —
+        which is what a program started while the target day is still closed
+        needs. The slot endpoint is deliberately not queried for such a day:
+        it answers for closed dates, which is what used to produce a booking
+        the portal then rejected.
+
+    Outcomes (4th returned value):
+      * ``slot_found``     — day opened AND a preferred slot free: booked
+        (or identified, in dry-run) and the race stopped.
+      * ``not_yet_open``   — stayed inside the window but the picker never
+        offered it within the bound: no booking was ever attempted.
+      * ``no_slot``        — the day was offered, but no preferred slot was
+        free within the bound.
+      * ``outside_window`` — beyond the rolling window: stopped as of now.
+      * ``stopped``        — ``stop`` event set (keeps ``/stopautobook``
+        responsive during a long wait).
 
     ``timeout`` bounds the whole loop and defaults to
-    ``booking_max_wait_minutes`` (360 = 6h) so the loop can never run forever.
-    ``max_attempts`` (default: unlimited) caps the refreshes instead; a single
-    check is ``max_attempts=1``.
+    ``booking_max_wait_minutes`` (360 = 6h); ``max_attempts`` (default:
+    unlimited) caps the refreshes instead, so a single check is ``max_attempts=1``.
 
     Returns (slot, all_slots, status_or_None, outcome). With dry_run=True the
     slot is only identified, no booking is submitted. ``stop`` is an optional
     ``threading.Event`` checked before every refresh, so a long wait cannot
-    delay ``/stopautobook`` (outcome ``"stopped"``).
+    delay ``/stopautobook`` (outcome ``"stopped"``). ``on_wait`` is an optional
+    no-arg callback run before every refresh — the autobooking loop uses it to
+    keep the session alive during waits that can span hours.
     """
     open_hour = int(cfg.get("booking_open_hour", 0))
     if retry_minutes is None:
@@ -2034,21 +2100,25 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
     # one fetch that also validates the session.
     s, meta = get_booking_meta(cfg)
 
-    # If this is the day that opens today and we are before the opening hour,
-    # wait until a couple of seconds before it, then start polling.
-    open_dt = now.replace(hour=open_hour, minute=0, second=0,
-                          microsecond=0)
-    if (wait_for_open
-            and target.date() == (now + timedelta(days=6)).date()
-            and now < open_dt):
-        while datetime.now() < open_dt - timedelta(seconds=3):
-            time.sleep(0.3)
+    # Micro-optimisation: if this is the day at the far end of the rolling
+    # window and the portal opens it at ``booking_open_hour`` (a convention,
+    # not a fact we rely on), sleep until a few seconds before that hour so the
+    # first refresh happens right when the day may open. Skipped entirely when
+    # booking_open_hour is unset/invalid-ish (0 keeps polling immediately).
+    if open_hour and wait_for_open:
+        _, window_last = window_limit(cfg, now)
+        open_dt = now.replace(hour=open_hour, minute=0, second=0,
+                              microsecond=0)
+        if target.date() == window_last and now < open_dt:
+            while datetime.now() < open_dt - timedelta(seconds=3):
+                time.sleep(0.3)
 
     api_date = f"{target.day}-{target.month}-{target.year}"
     target_date = target.date()
     deadline = datetime.now() + timedelta(seconds=timeout)
     last_slots: list = []
     attempt = 0
+    ever_opened = False
     while True:
         attempt += 1
 
@@ -2056,42 +2126,77 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
         if stop is not None and stop.is_set():
             return None, last_slots, None, "stopped"
 
-        # (1) The portal is authoritative about WHICH days exist at all. An
-        # empty list means "unknown" (no parsable picker) -> skip the check.
+        # (1) HARD limit: outside the rolling window nothing can be booked now,
+        #     and waiting for such a date would be pointless.
+        first, last = window_limit(cfg, datetime.now())
+        if target_date < first or target_date > last:
+            return None, [], None, "outside_window"
+
+        # (2) Has the portal opened that date yet? Empty picker = unreadable, so
+        #     trust the slot endpoint (degraded mode, no false refusal).
         offered = portal_bookable_dates(cfg)
-        if offered and target_date not in offered:
-            return None, [], None, "not_bookable"
+        opened = not offered or target_date in offered
+        if opened:
+            ever_opened = True
 
-        # (2) Are its slots open yet?
-        slots = get_available_slots(s, cfg, api_date, meta)
-        last_slots = slots
-        best = pick_best_slot(slots, preferred)
-        if best:
-            if dry_run:
-                return best, slots, None, "slot_found"
-            description = cfg.get("description", "Padel booking")
-            status = submit_booking_fast(s, cfg, meta,
-                                         target.strftime("%Y-%m-%d"),
-                                         best, description)
-            return best, slots, status, "slot_found"
+            # (3) Are its slots open? Only asked once the picker offers the day.
+            slots = get_available_slots(s, cfg, api_date, meta)
+            last_slots = slots
+            best = pick_best_slot(slots, preferred)
+            if best:
+                if dry_run:
+                    return best, slots, None, "slot_found"
+                description = cfg.get("description", "Padel booking")
+                status = submit_booking_fast(s, cfg, meta,
+                                             target.strftime("%Y-%m-%d"),
+                                             best, description)
+                return best, slots, status, "slot_found"
 
-        # (3) Bookable day, nothing preferred free yet -> refresh interval.
+        # (4) Nothing bookable yet -> the same 2-minute refresh process.
         if (max_attempts is not None and attempt >= max_attempts
                 or datetime.now() >= deadline):
+            if not ever_opened:
+                return None, [], None, "not_yet_open"
             return None, last_slots, None, "no_slot"
-        print(f"{ts_prefix()} [bot] {target:%a %d %b} is offered by the portal "
-              f"but no preferred slot is free (attempt {attempt}); "
+        reason = ("the portal has not opened this date yet" if not opened
+                  else "no preferred slot is free")
+        print(f"{ts_prefix()} [bot] {target:%a %d %b} is inside the portal's "
+              f"{window_label([first, last])} window but {reason}; "
               f"refreshing in {retry_secs // 60} min...", flush=True)
+        if on_wait is not None:
+            # Long waits must not starve the session: refresh it before sleeping
+            # so a hours-long wait cannot end with an expired session.
+            try:
+                on_wait()
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                print(f"{ts_prefix()} [bot] wait refresh failed (non-fatal): "
+                      f"{e}", flush=True)
         time.sleep(retry_secs)
 
 
 def cmd_autobook(cfg: dict, args: list) -> None:
-    """One-shot: book a target date now (or wait for midnight if it opens
-    today)."""
+    """One-shot: book a target date now, waiting 2 min at a time while the
+    portal has not opened that date yet (bounded by
+    ``booking_max_wait_minutes``).
+
+    With no date given the target is the freshest date the portal offers, or —
+    if its picker cannot be read — the last day of the rolling window.
+    """
     dry_run = "--dry-run" in args
     date_str = next((a for a in args if not a.startswith("--")), None)
-    target = parse_date(date_str) if date_str \
-        else datetime.now() + timedelta(days=6)
+    if date_str:
+        target = parse_date(date_str)
+    else:
+        # Never assume today+6: use the portal's own view of the window.
+        try:
+            offered = portal_bookable_dates(cfg)
+        except Exception:  # pylint: disable=broad-exception-caught
+            offered = []
+        if offered:
+            target = datetime.combine(offered[-1], datetime.min.time())
+        else:
+            target = datetime.combine(
+                window_limit(cfg, datetime.now())[1], datetime.min.time())
 
     preferred = preferred_slots_for_day(cfg, target.strftime("%A"))
     target_str = target.strftime("%Y-%m-%d")
@@ -2106,22 +2211,33 @@ def cmd_autobook(cfg: dict, args: list) -> None:
         print(f"Already booked {target:%a %d %b} successfully (see "
               f"booked.json). Not booking again.")
         return
+    retry = int(cfg.get("slot_retry_minutes", 2))
+    maxw = int(cfg.get("booking_max_wait_minutes", 360))
     best, slots, r, outcome = run_booking_race(
         cfg, target, preferred, dry_run=dry_run)
-    if outcome == "not_bookable":
-        # The portal's "Check in date" picker has no option for this day: it
-        # cannot be booked now, so waiting for a slot would be pointless.
-        print(f"NOT BOOKABLE: the portal does not offer "
-              f"{target:%a %d %b %Y} in its 'Check in date' right now, so "
-              f"there is nothing to wait for.")
+    if outcome == "outside_window":
+        # Beyond the rolling window: it can never be booked now, so waiting
+        # for it would be pointless.
+        print(f"OUTSIDE THE PORTAL WINDOW: {target:%a %d %b %Y} is not inside "
+              f"the portal's {booking_window_days(cfg)}-day rolling window "
+              f"(today .. today+{booking_window_days(cfg) - 1}).")
         note = bookable_window_note(cfg).strip()
         print(f"  {note or 'Portal window could not be read.'}")
         sys.exit(2)
+    if outcome == "not_yet_open":
+        # Inside the window but the picker never opened the date while we
+        # waited: nothing was attempted, and nothing would have succeeded.
+        print(f"NOT OPEN YET: {target:%a %d %b %Y} is inside the portal's "
+              f"{booking_window_days(cfg)}-day window, but its 'Check in date' "
+              f"never offered it while we refreshed every {retry} min for "
+              f"{maxw} min. Nothing was attempted.")
+        print("  The autobooking scheduler books it as soon as the portal "
+              "opens that date.")
+        sys.exit(3)
     if best is None:
-        retry = int(cfg.get("slot_retry_minutes", 2))
-        print(f"STOPPED: the portal offers {target:%a %d %b %Y} but none of "
+        print(f"STOPPED: the portal opened {target:%a %d %b %Y} but none of "
               f"the preferred slots was free after refreshing every {retry} "
-              f"min.")
+              f"min (up to {maxw} min).")
         print(f"  Slots seen for that date ({len(slots)}):")
         for sl in slots:
             print(f"    {sl['label']}  [{sl['value']}]")
@@ -2176,13 +2292,19 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
     """Resident autobooking loop: keep the session alive and book preferred
     slots. It reacts to three events:
 
-      1. Program start  -> book ALL desired days whose window is already open
-         (catches up on days missed while the bot was not running, and books
-         the day whose window just opened, not only the nearest one).
-      2. Prefs change   -> when /prefs (or config.json) adds a new day or a new
-         time slot, (re)attempt every desired day that is bookable now.
-      3. New day opens  -> when a new calendar day starts and its window
-         (for today+6) opens at ``booking_open_hour``, book ONLY that new day.
+      1. Program start  -> attempt EVERY desired day inside the portal's
+         rolling window, in one process: the days the "Check in date" picker
+         already offers first (freshest first), then the days inside the window
+         it has not opened yet — those are NOT skipped, each one refreshes the
+         portal every ``slot_retry_minutes`` until it opens and a preferred
+         slot is free (bounded by ``booking_max_wait_minutes``).
+      2. Prefs change   -> (re)attempt every desired day inside the window.
+      3. The portal starts offering a NEW date (its window slid forward) ->
+         attempt only those new days.
+
+    There is no midnight/``today+6`` arithmetic any more: the window width
+    comes from ``booking_window_days`` (default 7) and which of those days are
+    open comes from the portal itself.
 
     Shared by the standalone daemon and the Telegram bot (which runs it in a
     background thread so `python padel_booking.py telegram` also autobooks).
@@ -2280,17 +2402,27 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
             best, slots, r, outcome = run_booking_race(
                 cfg, datetime.combine(target, datetime.min.time()),
                 preferred, wait_for_open=False, dry_run=dry_run,
-                stop=stop_event)
+                stop=stop_event, on_wait=lambda: keepalive(cfg))
             t_race = time.time() - t0
-            # The portal's "Check in date" picker has no option for this day,
-            # so it is not bookable right now: stop as of now instead of
-            # waiting. The loop's window-change trigger picks the day up again
-            # once the portal starts offering it.
-            if outcome == "not_bookable":
-                log(f"*** {target:%a %d %b %Y} is NOT offered by the portal "
-                    f"right now (no 'Check in date' option); not waiting.")
-                notify_(f"ℹ️ {target:%a %d %b} is not bookable on the portal "
-                        f"yet — the bot will retry when its window opens.")
+            # Two honest reasons for having booked nothing: outside the rolling
+            # window the day can never be booked now (stop, never wait), while
+            # inside it but unlisted means the portal has not opened the date
+            # yet (the window-change trigger retries it once it is listed).
+            if outcome == "outside_window":
+                log(f"*** {target:%a %d %b %Y} is OUTSIDE the portal's "
+                    f"{booking_window_days(cfg)}-day rolling window; it can "
+                    f"never be booked now, not waiting.")
+                notify_(f"ℹ️ {target:%a %d %b} is outside the portal's "
+                        f"booking window — nothing to book.")
+                return False
+            if outcome == "not_yet_open":
+                log(f"*** {target:%a %d %b %Y} is inside the window but the "
+                    f"portal has not opened it yet (refreshed every "
+                    f"{int(cfg.get('slot_retry_minutes', 2))} min for up to "
+                    f"{int(cfg.get('booking_max_wait_minutes', 360))} min); "
+                    f"nothing was attempted.")
+                notify_(f"ℹ️ {target:%a %d %b}: the portal has not opened it "
+                        f"yet — the bot books it as soon as it opens.")
                 return False
             if outcome == "stopped":
                 log(f"*** Race for {target:%a %d %b} interrupted "
@@ -2418,7 +2550,7 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
             log(f"WARNING: unknown day name {e} in preferred_slots; "
                 "keeping the previous target days.")
         keepalive_secs = int(cfg.get("keepalive_minutes", 20)) * 60
-        open_hour = int(cfg.get("booking_open_hour", 0))
+        window_days = booking_window_days(cfg)
 
         # --- keep-alive ---------------------------------------------------
         if time.time() - last_keepalive >= keepalive_secs:
@@ -2444,15 +2576,20 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
         # --- booking -------------------------------------------------------
         # Three triggers, all driven by the window the PORTAL advertises (the
         # "Check in date" option list, re-read at most once per TTL):
-        #   (1) Program start  -> book ALL desired days the portal offers.
-        #   (2) Prefs changed  -> (re)attempt every desired offered day.
-        #   (3) The window slid forward (the portal started offering a NEW
-        #       date)          -> book ONLY those new days.
+        #   (1) Program start  -> attempt EVERY desired day inside the rolling
+        #       window: the days the picker already offers first (freshest
+        #       first), then the days inside the window it has not opened yet,
+        #       which are waited for (2 min at a time) rather than skipped.
+        #   (2) Prefs changed  -> (re)attempt every desired day inside the
+        #       window, same order.
+        #   (3) The window slid forward or the portal started offering a NEW
+        #       date -> attempt ONLY those new days.
         #
-        # There is no +6 arithmetic and no booking_open_hour here any more:
-        # the portal says exactly which days exist, so a 6-day window (e.g.
-        # ending 14 Nov) is handled like a 7-day one, and a date it never
-        # offers is never attempted.
+        # There is no +6 arithmetic here: the window WIDTH comes from
+        # booking_window_days (7) and which of those days are OPEN comes from
+        # the portal. A desired weekday whose date is still outside the window
+        # is not attempted (it can never be booked now); one that is inside but
+        # unopened IS attempted, by waiting.
         prefs_sig = prefs_signature(cfg)
         try:
             # Cached: at most one page fetch per _BOOKABLE_DATES_TTL, so this
@@ -2462,18 +2599,27 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
             log(f"WARNING: window lookup failed: {e}. Falling back to the "
                 f"arithmetic window.")
             window_dates = []
-        candidates = bookable_targets(targets, now, open_hour,
-                                      window_dates or None)
+        candidates = bookable_targets(targets, now, window_dates or None,
+                                      window_days)
         if not window_dates:
-            window_dates = _arithmetic_window(now)
+            # Picker unreadable: fall back to the hard rolling window so the
+            # messages below still describe what the portal can accept.
+            window_dates = rolling_window_dates(now, window_days)
         fresh = ([d for d in candidates if last_window is not None
                   and d not in last_window] if last_window else [])
         if not started:
-            # (1) Program start: catch up on every desired day the portal
-            # offers - including the one that just opened - instead of only
-            # the nearest day.
+            # (1) Program start: catch up on every desired day inside the
+            # window, so a day the portal has not opened yet enters the same
+            # refresh-every-2-min process instead of being skipped.
+            not_open = [d for d in candidates if d not in window_dates]
             log("Startup: attempting to book all desired days "
                 f"(portal window {window_label(window_dates)})...")
+            if not_open:
+                log(f"Startup: portal has not opened "
+                    f"{window_label(not_open)} yet — waiting for them "
+                    f"(refreshing every {int(cfg.get('slot_retry_minutes', 2))} "
+                    f"min, up to {int(cfg.get('booking_max_wait_minutes', 360))} "
+                    f"min each).")
             for target in candidates:
                 book_day(target, now)
             started = True
@@ -2493,10 +2639,13 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
             last_prefs_sig = prefs_sig
             last_window = set(window_dates)
         elif fresh:
-            # (3) The portal started offering new dates: attempt ONLY those.
+            # (3) Either the rolling window slid so that a new target date is
+            # now inside it, or the portal started offering dates it did not
+            # offer before: attempt ONLY those (an unopened one is waited for).
             names = ", ".join(d.strftime("%a %d %b") for d in fresh)
-            log(f"Portal window opened new date(s) {names} "
-                f"(window {window_label(window_dates)}); booking them...")
+            log(f"New target date(s) {names} became reachable "
+                f"(portal window {window_label(window_dates)}); booking them "
+                f"— waiting while the portal has not opened them yet...")
             for d in fresh:
                 if not already_booked_successfully(
                         d.strftime("%Y-%m-%d")):

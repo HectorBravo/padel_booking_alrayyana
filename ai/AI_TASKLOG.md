@@ -4,7 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 0/12 | 0m | none |
+| 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 12/12 | 16m | none |
 | 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m | none |
 | 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m | none |
 | 10-04-2026 15:10:00 | [T3: Install nano in Docker image](#task-t3-install-nano-in-docker-image) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 5m | none |
@@ -18,8 +18,8 @@
 - **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 09-11-2026 00:41:06
-- **Last Updated**: 09-11-2026 00:55:00
-- **Time Spent**: 14m
+- **Last Updated**: 09-11-2026 00:57:00
+- **Time Spent**: 16m
 - **Branch**: [`fix/ai-portal-bookable-dates`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-portal-bookable-dates)
 - **Commit(s)**: pending (code commit on the AI branch; the two `docs(ai):` commits are the log ones on `main`)
 - **Blockers**: none
@@ -46,18 +46,18 @@
 
 ### Subtasks / Plan
 
-- [ ] Parse the "Check in date" `<select>` options into dates — `parse_booking_dates(html)` (structure-agnostic, multi-format)
-- [ ] `portal_bookable_dates(cfg)` — fetch/cached (TTL 60 s) via the existing booking-page GET, returns sorted `date` list
-- [ ] `bookable_window_text(...)` + `cmd_window` CLI command (`python3 padel_booking.py window`) to show the live window
-- [ ] `cmd_slots` — warn when a requested date is outside the portal window (still list what the endpoint says)
-- [ ] `cmd_book` — refuse a non-bookable date, message carries the portal's window
-- [ ] `cmd_pick` — iterate the portal's dates instead of `today .. today+6`
-- [ ] `bookable_targets` — choose target weekdays from the portal's dates (arithmetic only as fallback)
-- [ ] `run_booking_race` — 2-minute refresh loop + tri-state result (`slot_found` / `no_slot` / `not_bookable`)
-- [ ] `book_day` — pre-check bookability + tri-state reporting; stop now when the day is not bookable
-- [ ] `run_autobook_loop` — trigger 3 becomes "a new date appeared in the portal's window" (no `today+6`, no `booking_open_hour`)
-- [ ] `padel_telegram.py` — `_show_date_keyboard` builds buttons from portal dates; `_show_slots` refuses non-bookable dates; `_do_book` says "portal window only goes to X" on failure; new `/window` command
-- [ ] Docs: README.md, TELEGRAM.md, config.sample.json, module docstrings (new `slot_retry_minutes`, `booking_max_wait_minutes`)
+- [x] Parse the "Check in date" `<select>` options into dates — `parse_booking_dates(html)` (structure-agnostic, multi-format)
+- [x] `portal_bookable_dates(cfg)` — fetch/cached (TTL 60 s) via the existing booking-page GET, returns sorted `date` list
+- [x] `bookable_window_note(...)` + `cmd_window` CLI command (`python3 padel_booking.py window`) to show the live window
+- [x] `cmd_slots` — warn when a requested date is outside the portal window (still list what the endpoint says)
+- [x] `cmd_book` — refuse a non-bookable date, message carries the portal's window
+- [x] `cmd_pick` — iterate the portal's dates instead of `today .. today+6`
+- [x] `bookable_targets` — choose target weekdays from the portal's dates (arithmetic only as fallback)
+- [x] `run_booking_race` — 2-minute refresh loop + tri-state result (`slot_found` / `no_slot` / `not_bookable`)
+- [x] `book_day` — pre-check bookability + tri-state reporting; stop now when the day is not bookable
+- [x] `run_autobook_loop` — trigger 3 becomes "a new date appeared in the portal's window" (no `today+6`, no `booking_open_hour`)
+- [x] `padel_telegram.py` — `_show_date_keyboard` builds buttons from portal dates; `_show_slots` refuses non-bookable dates; `_do_book` says "portal window only goes to X" on failure; new `/window` command
+- [x] Docs: README.md, TELEGRAM.md, config.sample.json, module docstrings (new `slot_retry_minutes`, `booking_max_wait_minutes`)
 
 ### Full Context Notes for AI Agents
 

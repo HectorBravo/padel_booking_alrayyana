@@ -8,9 +8,54 @@
 | 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m | none |
 | 10-04-2026 15:10:00 | [T3: Install nano in Docker image](#task-t3-install-nano-in-docker-image) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 5m | none |
 
-> ✅ **7 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **8 completed task(s)** — [View completed tasks](#completed-tasks)
 
 ---
+
+## Task T8: Merge and delete three AI branches
+
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
+- **Type**: <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span>
+- **Created**: 09-11-2026 00:26:36
+- **Last Updated**: 09-11-2026 00:31:00
+- **Time Spent**: 5m
+- **Branch**: n/a — ref-only cleanup. The deliverable is a *branch deletion*, which no branch or commit can carry, so no `*/ai-*` branch was created (the rules' "never push to `main`" guard applies to code changes; the only file touched here is this log, which the rules allow on the user's branch).
+- **Commit(s)**: [383ca82](https://github.com/HectorBravo/padel_booking_alrayyana/commit/383ca82) (`feat/ai-google-calendar-integration` tip) · [c579ded](https://github.com/HectorBravo/padel_booking_alrayyana/commit/c579ded) (`feat/ai-install-nano` tip) · [34410be](https://github.com/HectorBravo/padel_booking_alrayyana/commit/34410be) (`fix/ai-reconcile-booked-json` tip) — all three remain reachable from `main`; branch deletion itself creates no commit, and this entry ships in its own `docs(ai):` commit on `main`
+- **Blockers**: none
+- **Findings & Notes**:
+  - **Nothing to merge**: `git merge` on each branch printed `Already up to date.`; `git branch --merged main` listed all three; `git log main..<branch>` empty for all three; `git merge-base main <branch>` == branch tip. Their work was already integrated by earlier merges — `a7fbf78` (PR #3, google-calendar), `41ff437` (Merge branch `feat/ai-install-nano`), `4874386` (PR #2, reconcile-booked-json, absorbed transitively via the google-calendar branch chain).
+  - **Already merged on GitHub too**: `git ls-remote --heads origin` listed **only** `refs/heads/main` — GitHub auto-deleted the three head refs when the PRs were merged. The local clone still had stale `origin/...` tracking refs, which is why `git branch -a` showed them.
+  - **Actions taken**: `git branch -d` (safe form — refuses unmerged branches, so it doubles as proof of merge status) for the three local branches; `git fetch origin --prune` removed the stale tracking refs; `git push --dry-run origin --delete ...` proved the remote refs no longer exist (`remote ref does not exist`).
+  - **Post-state verified**: `git branch -a` → only `main`, `origin/HEAD`, `origin/main`; `git branch -vv` → `main f86ec6a [origin/main]`; remote heads → only `main`. Working tree clean, `main` == `origin/main`.
+  - **Side effect on this log**: the `tree/<branch>` links for T1/T2/T3 (and the deleted T4–T7 branches) now 404 on GitHub; the `commit/...` links still resolve because those commits stay reachable from `main`.
+
+### User Confirmations
+
+None yet.
+
+### Subtasks / Plan
+
+- [x] Enumerate the AI branches (`git branch -a`) and their ancestry vs `main` (`merge-base`, `main..<branch>`, `--merged`)
+- [x] Confirm remote state with `git ls-remote --heads origin`
+- [x] Merge all three into `main` (git reported `Already up to date.` — no-op, `main` still `f86ec6a`)
+- [x] Delete the three local branches with `git branch -d`
+- [x] Remove the stale remote-tracking refs (`git fetch origin --prune` / `git remote prune origin`)
+- [x] Verify the remote side: `git push --dry-run --delete` → "remote ref does not exist" (already gone)
+- [x] Record T8 in this log + commit/push the log-only `docs(ai):` commit on `main`
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: Self-contained knowledge base to resume without other context.
+
+- **Repo**: `/home/hbravo/repos/padel_booking_alrayyana` (Linux), remote `git@github.com:HectorBravo/padel_booking_alrayyana.git`, current branch `main`, HEAD `f86ec6a` == `origin/main`.
+- **Task**: purely a ref-management chore — merge + delete `feat/ai-google-calendar-integration`, `feat/ai-install-nano`, `fix/ai-reconcile-booked-json`. **No source file was touched**, so `padel_booking.py` / `google_calendar.py` / `Dockerfile` are unchanged.
+- **Merge status (verified 3 independent ways)**: all three tips are ancestors of `main`: `383ca82` (google-calendar), `c579ded` (install-nano), `34410be` (reconcile-booked-json). Chain: `34410be` → merged into google-calendar branch at `4874386`; `c579ded` → merged into `main` at `41ff437`; `383ca82` → `main` at `a7fbf78` (PR #3). Deleting them therefore loses nothing, and `git branch -d` (not `-D`) accepted them, which re-proves it.
+- **Commands used and their real output**: `git merge <b>` → `Already up to date.`; `git branch -d b1 b2 b3` → "Deleted branch ... (was <tip>)" x3; `git push --dry-run origin --delete b1 --delete b2 --delete b3` → exit 1 with "unable to delete '<b>': remote ref does not exist" for each (expected: GitHub auto-deletes PR head refs on merge); `git fetch origin --prune` → "[deleted] (none) -> origin/<b>" x3.
+- **Gotcha for future sessions**: `run_commands` executes the commands of one call concurrently, so a `git branch -a` issued in the same call as the deletions printed the **pre-delete** listing. Re-checking in a fresh call showed the true post-state (only `main`). Do not trust same-call listings for state-changing git operations.
+- **Current state = done**: no `*/ai-*` branch exists locally or remotely; only `main` / `origin/main` remain. Nothing pending.
+- **Not applicable to this task**: the `*/ai-*` branch + PR workflow — there is no code diff to carry on a branch. Later *code* tasks must still follow the normal flow (AI branch → push -u → PR/merge → final log commit on `main` → `git merge --ff-only origin/main` + `--force-with-lease` re-push).
+- **Rule 5 (core.filemode)**: untouched — this repo was not cloned in this session. It is a Windows/Linux shared repo (`ai/AI_TASKLOG.md` references `D:\Repos\padel_booking_alrayyana`), so if it is ever re-cloned on Windows, unset the local `core.filemode` after cloning and keep the global `false` (Windows) / `true` (Linux).
+
 
 ## Task T7: Diagnose OTP login hang; session check via /dashboard
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
@@ -335,6 +380,7 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
+| 09-11-2026 00:26:36 | [T8: Merge and delete three AI branches](#task-t8-merge-and-delete-three-ai-branches) | <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span> | 7/7 | 5m |
 | 11-10-2026 15:50:19 | [T7: Diagnose OTP login hang; session check via /dashboard](#task-t7-diagnose-otp-login-hang-session-check-via-dashboard) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 8/10 | 17m |
 | 08-10-2026 01:47:09 | [T6: Raise portal-wide session timeout to 90s](#task-t6-raise-portal-wide-session-timeout-to-90s) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 10m |
 | 08-10-2026 00:27:49 | [T5: Increase mybookings timeout to 90s](#task-t5-increase-mybookings-timeout-to-90s) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/5 | 6m |

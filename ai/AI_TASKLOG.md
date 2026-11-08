@@ -4,6 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 0/12 | 0m | none |
 | 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m | none |
 | 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m | none |
 | 10-04-2026 15:10:00 | [T3: Install nano in Docker image](#task-t3-install-nano-in-docker-image) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 5m | none |
@@ -11,6 +12,70 @@
 > ✅ **8 completed task(s)** — [View completed tasks](#completed-tasks)
 
 ---
+
+## Task T9: Derive bookable days from the portal
+
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
+- **Created**: 09-11-2026 00:41:06
+- **Last Updated**: 09-11-2026 00:55:00
+- **Time Spent**: 14m
+- **Branch**: [`fix/ai-portal-bookable-dates`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-portal-bookable-dates)
+- **Commit(s)**: pending (code commit on the AI branch; the two `docs(ai):` commits are the log ones on `main`)
+- **Blockers**: none
+- **Findings & Notes**:
+  - **Symptom (user report, 09-11-2026)**: the portal's "Check in date" dropdown at `/asset/assetbooking/370` only offers dates up to **14 Nov 2026**, but the Telegram bot offers **15 Nov** and the booking then fails.
+  - **Root cause**: the bookable window is never read from the portal — `today .. today+6` is *assumed* in four places: `padel_telegram.py:_show_date_keyboard:686-694` (`for i in range(7)`), `padel_booking.py:cmd_pick:1519-1528`, `padel_booking.py:bookable_targets:1649-1692` (`open_dt = (candidate-6d) @ booking_open_hour`) and `run_autobook_loop:2152` (`new_day = now.date() + timedelta(days=6)`). Today's window is only 6 days wide (ends today+5), so the +6 assumption is simply wrong.
+  - **Why the failure is nearly silent**: the *slot* endpoint `ajaxctrl/getAmenityBookingSlot` does not validate the date, so slots are shown for 15 Nov and the date is offered; the *booking* POST `/asset/assetbooking/{id}` with `check_in_date="Nov 15, 2026"` is rejected because that value is not one of the form's options. `_do_book:920-974` verifies with `ok = len(verify_slots) == 0` → False → "❌ Booking FAILED".
+  - **Fix direction (user instruction)**: the authoritative bookable dates are the `<option>`s of the "Check in date" `<select>` rendered by the booking page (already fetched for `parse_booking_meta`); drive every decision from them instead of arithmetic.
+  - **Retry strategy (user instruction)**: refresh every **2 minutes** while the target day IS offered but its slots are not open/available yet; stop as soon as a preferred slot is bookable (book + report); stop **immediately** when the portal does not offer the day at all.
+  - **Degraded mode kept on purpose**: a page with no parsable date `<select>` yields `[]` and callers fall back to the old arithmetic with a logged warning — a changed portal markup must never block booking.
+  - **Not verified live**: `config.json` is gitignored/absent here, so no portal request is possible from this machine; verification = `py_compile` + synthetic-HTML harness. Real `<select>` markup still needs confirming (see pending item).
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+- [ ] (09-11-2026 00:55:00) Exact markup of the portal's date picker — is "Check in date" a `<select name="check_in_date">` with `<option value="Nov 15, 2026">`? A saved `booking_page.html` or the DevTools `outerHTML` pins the parser; it is currently structure-agnostic and format-tolerant.
+- [ ] (09-11-2026 00:55:00) Retry defaults `slot_retry_minutes = 2` (per instruction) and `booking_max_wait_minutes = 360` cap — confirm the 6h bound is acceptable (it only prevents an endless loop).
+
+**Confirmed (user provided):**
+
+- (09-11-2026 00:41:06) "bookable days should be obtained from the portal itself … the dates selectable from the 'Check in date' at `/asset/assetbooking/370`" → bookability comes from the portal page, not `booking_open_hour`/+6 arithmetic.
+- (09-11-2026 00:41:06) "whenever the booking window is not open, refresh every 2 minutes until success … if the day is bookable and the slot is available, stop and indicate it; if the day is not bookable, stop as of now" → tri-state: BOOK (stop) / WAIT 2 min (offered, no slot yet) / NOT BOOKABLE (stop now).
+
+### Subtasks / Plan
+
+- [ ] Parse the "Check in date" `<select>` options into dates — `parse_booking_dates(html)` (structure-agnostic, multi-format)
+- [ ] `portal_bookable_dates(cfg)` — fetch/cached (TTL 60 s) via the existing booking-page GET, returns sorted `date` list
+- [ ] `bookable_window_text(...)` + `cmd_window` CLI command (`python3 padel_booking.py window`) to show the live window
+- [ ] `cmd_slots` — warn when a requested date is outside the portal window (still list what the endpoint says)
+- [ ] `cmd_book` — refuse a non-bookable date, message carries the portal's window
+- [ ] `cmd_pick` — iterate the portal's dates instead of `today .. today+6`
+- [ ] `bookable_targets` — choose target weekdays from the portal's dates (arithmetic only as fallback)
+- [ ] `run_booking_race` — 2-minute refresh loop + tri-state result (`slot_found` / `no_slot` / `not_bookable`)
+- [ ] `book_day` — pre-check bookability + tri-state reporting; stop now when the day is not bookable
+- [ ] `run_autobook_loop` — trigger 3 becomes "a new date appeared in the portal's window" (no `today+6`, no `booking_open_hour`)
+- [ ] `padel_telegram.py` — `_show_date_keyboard` builds buttons from portal dates; `_show_slots` refuses non-bookable dates; `_do_book` says "portal window only goes to X" on failure; new `/window` command
+- [ ] Docs: README.md, TELEGRAM.md, config.sample.json, module docstrings (new `slot_retry_minutes`, `booking_max_wait_minutes`)
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: Self-contained knowledge base to resume without other context.
+
+- **Repo**: `/home/hbravo/repos/padel_booking_alrayyana`, remote `git@github.com:HectorBravo/padel_booking_alrayyana.git`, base branch `main` HEAD `a87ee07`. Deps present: `curl_cffi` (browser TLS impersonation, required for Akamai), `bs4` (`beautifulsoup4`), Python 3.12. **`config.json` is gitignored and absent** → no live portal request is possible from this machine (login needs an OTP email); verification = `py_compile` + synthetic HTML test in `/tmp` (repo has NO test framework, `requirements.txt` has no pytest).
+- **Portal endpoints** (`padel_booking.py`, `BASE_URL = https://myportal.asteco.com`): booking page `GET /asset/assetbooking/{asset_booking_id}` (id `370` in `config.sample.json`, CodeIgniter + jQuery, server-rendered); slot list `POST /ajaxctrl/getAmenityBookingSlot` with `serach_val[date]=d-m-yyyy`, `serach_val[id_asset]`, `serach_val[is_paid]=N`, `user`, `id_community`, `attendees`, `id_unit`, `clsId` (`_slots_endpoint:688-732` → `(slots, alert_danger_text)`); booking submit `POST /asset/assetbooking/{id}` with `check_in_date = to_form_date(...)` = `"%b %d, %Y"` (`to_form_date:515`) + `check_in_time = slot["value"]` (`submit_booking:906-951`, `submit_booking_fast:954-983` uses `stream=True` + `r.close()` so the alert text is NOT readable there); cancel `POST /booking/cancelAmenityBooking`; my-bookings `POST /booking/myBooking` (slow ~4.5 s).
+- **Why the POST is rejected**: the page's form field `check_in_date` is a `<select>`; jQuery submits the selected option's *value* and the server validates it against the option list it generated for the current window. Dates outside the window have no option → rejected (Bootstrap `alert-danger`, surfaced by `_booking_error:1002-1015` / `_alert_text:1290-1296`). The slot endpoint does NOT validate the date → that is exactly why 15 Nov looked bookable.
+- **Cache pattern to mirror**: `_META_CACHE = (session, monotonic_ts, meta)`, `_META_TTL = 120`, `_meta_cached(s)`/`_meta_store(s, meta)` at `padel_booking.py:286-300`; `get_booking_meta(cfg):626-645` caches `_STATE["meta"]`; `_STATE = {"meta": None, "bookings": []}` at :578; `_SESSION_LOCK = threading.Lock()` at :204.
+- **Call sites that must change (verified)**: `cmd_slots:811-840`, `cmd_book:843-904`, `cmd_pick:1507-1597` (`for i in range(7)`), `bookable_targets:1649-1692` (call sites `run_autobook_loop:2127` and `:2142`), `run_booking_race:1727-1779` (call sites `cmd_autobook:1803`, `book_day:1959`), `run_autobook_loop:1853-2198` (trigger 3 at :2147-2196 uses `new_day = now.date() + timedelta(days=6)` + 360×10 s sync wait), `book_day` nested at :1908-2052. Telegram: `_show_date_keyboard:686-694` (call sites `_on_slots:684`, `_show_slots:708`, `_on_book:719`), `_show_slots:696-716`, `_do_book:920-974`, dispatch `_handle:436-462`, imports `padel_telegram.py:26-38`.
+- **Decision — single source of truth**: `portal_bookable_dates(cfg, refresh=True) -> list[date]` (sorted, deduped, `[]` == unknown). Every decision point consumes it; `today .. today+6` arithmetic survives ONLY as the fallback when it returns `[]` (log a warning). `booking_open_hour` stays in config so nothing breaks; it is then used only by that fallback.
+- **Decision — tri-state return, not bool**: `run_booking_race` returns `(slot, slots, status, outcome)` with `outcome ∈ {"slot_found","no_slot","not_bookable"}`. `book_day` and `cmd_autobook` MUST unpack 4 values — a stale 3-tuple unpack is the main regression risk; grep `run_booking_race(` after editing.
+- **Decision — the 2-minute refresh lives inside the race**, not in the scheduler: `slot_retry_minutes` (default 2) replaces the hardcoded `time.sleep(30)` at :1775-1778; `booking_max_wait_minutes` (default 360) bounds the loop; each iteration re-reads `portal_bookable_dates` so a day that stops being offered exits immediately ("not bookable → stop as of now").
+- **Trigger 3 redesign**: replace "new calendar day ⇒ book today+6" with "diff the portal's bookable-date set against the last seen set; for each newly offered target weekday, run the race". Kills the `booking_open_hour` dependency and stays correct when the window is 6 days instead of 7.
+- **Parser tolerance requirement (no live sample)**: prefer `select` whose `name`/`id` contains `check_in_date`; else scan every `<select>` and keep the one with the most date-like options. Accept option `value` AND option text in `%b %d, %Y`, `%d %b %Y`, `%d %B %Y`, `%d/%m/%Y`, `%d-%m-%Y`, `%Y-%m-%d`, plus day/month-only with year inference. Ignore non-date options (weekday headers, "Today", …).
+- **Current state**: no code changed yet (log written first per the repo's git rules). **Next**: subtask 1 on branch `fix/ai-portal-bookable-dates` → parser, then call-site rewiring, then `py_compile` + `/tmp` harness.
+- **Git flow (rules)**: log-first `docs(ai):` on `main` (done), AI branch `fix/ai-portal-bookable-dates` pushed with `-u`, code commit `fix(booking): [ai] …`, never push code to `main` (only `ai/AI_TASKLOG.md` is allowed); final `done` log commit on `main` AFTER the user merges, then `git merge --ff-only origin/main` + `--force-with-lease` re-push of the AI branch.
+- **Environment gotcha**: `run_commands` runs the commands of one call **concurrently**, so never read git/file state in the same call that mutates it (it already bit the previous task).
 
 ## Task T8: Merge and delete three AI branches
 

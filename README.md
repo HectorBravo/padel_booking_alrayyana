@@ -31,10 +31,17 @@ Automates booking the Al Rayyana community padel court on the Asteco portal
   booked?, booking limit?) run against this cache with zero extra network
   calls. The cache is refreshed from the portal after every successful
   booking or cancellation so `/mybookings` always shows current data.
+- **Bookable window comes from the portal** — the booking page lists the
+  bookable dates in its "Check in date" `<select>`, and only those dates are
+  accepted (a date it does not offer is rejected when submitted, even though
+  the slot endpoint still answers for it). The bot reads that list instead of
+  assuming `today .. today+6`, so it never offers or attempts a date the
+  portal has not opened. `python padel_booking.py window` and the bot's
+  `/window` show the live window.
 - **Booking limit** — the portal allows a maximum of **3 active (non-cancelled)
-  bookings** within the 7-day bookable window (today through today+6). The
-  bot enforces this locally: if you already hold 3 bookings in the window,
-  further booking attempts are skipped without hitting the portal.
+  bookings** within its bookable window. The bot enforces this locally: if you
+  already hold 3 bookings in the window, further booking attempts are skipped
+  without hitting the portal.
 
 ## Files
 | File               | Purpose                                              | Protected |
@@ -100,7 +107,9 @@ Windows.
      "min_start_hour": "18:00",
      "description": "Padel booking",
      "keepalive_minutes": 20,
-     "booking_open_hour": 0
+     "booking_open_hour": 0,
+     "slot_retry_minutes": 2,
+     "booking_max_wait_minutes": 360
    }
    ```
    `asset_booking_id` is the number in the booking URL
@@ -115,7 +124,9 @@ Windows.
    - `min_start_hour` – time cutoff (`HH:MM`, 24h, default `18:00` = 6pm):
      `slots` lists only slots from that time on, while `pick` shows all slots
      but highlights the matching ones in green. Override with `--from HH:MM`.
-   - `booking_open_hour` – the hour (24h) the portal opens a new day (0 = midnight).
+   - `slot_retry_minutes` – how often the bot re-reads the portal while a bookable day's slots are not open/free yet (default 2).
+   - `booking_max_wait_minutes` – safety cap on that wait (default 360 = 6h). A day the portal does not offer at all is never waited for.
+   - `booking_open_hour` – only used as a fallback when the booking page gives no parsable "Check in date" list (the old `today .. today+6` rule).
    - `keepalive_minutes` – how often the bot refreshes the session.
    - `description` – text stored with the booking.
 
@@ -136,8 +147,9 @@ python3 padel_booking.py slots 2026-09-26 --from 18:00
 # 4) Book a specific slot (asks for confirmation first)
 python3 padel_booking.py book 2026-09-26 "18:00-19:00" "Padel with friends"
 
-# 4b) OR browse interactively: lists every available slot from today through
-#     the last bookable day (today + 6), then you pick by number. You can
+# 4b) OR browse interactively: lists every available slot across the portal's
+#     bookable window (whatever its "Check in date" picker offers — usually
+#     today .. today+5/6), then you pick by number. You can
 #     choose several (one per day). It confirms before booking.
 python3 padel_booking.py pick
 #     ...or highlight the evening slots (green) from a given time on:
@@ -164,20 +176,25 @@ Dates accept `YYYY-MM-DD`, `DD/MM/YYYY` or `DD-MM-YYYY`.
 
 ## Auto-booking
 
-The portal opens each day's bookings at **midnight (00:00) for the date 6 days
-ahead** (e.g. Sun 27 Sep opens Mon 21 Sep at midnight). Concurrency is low, so
-the bot simply polls one request every 30s from the moment the window opens
-until it books your slot (or 5h pass).
+Which days can be booked at all comes from the portal: the booking page's
+**"Check in date" picker lists them** (the window can stop at today+5 rather
+than today+6), and a date it does not list is rejected on submit even though
+the slot endpoint still answers for it. The bot reads that list, so it never
+offers or attempts a date the portal has not opened. While a bookable day's
+slots are not open/free yet it **refreshes the portal every
+`slot_retry_minutes` (default 2 min)** and stops as soon as a preferred slot
+is free; a day the portal does not offer is **never waited for**.
 
 The autobooking runs **inside the Telegram bot** — start it with
-`python padel_booking.py telegram` (it autostarts). Every day at midnight it
-checks whether the newly opened date (`today + 6 days`) is one of the
-days in your `preferred_slots` map. If so, it polls the slot endpoint (one request every 30s)
-and books the first free slot from that day's `preferred_slots` list, retrying
-until it succeeds or 5h pass (one slot per day). It only fires on the day the
-target slot's window opens, refreshes the session every `keepalive_minutes`,
-and messages you the result (✅ BOOKED / ❌ FAILED / no slot). Pause it with
-`/stopautobook`, resume with `/startautobook`.
+`python padel_booking.py telegram` (it autostarts). Whenever the portal starts
+offering a new date (its window slid forward), it checks whether that date is
+one of the days in your `preferred_slots` map; if so it polls the portal
+(refreshing every `slot_retry_minutes`) and books the first free slot from
+that day's `preferred_slots` list, retrying until it succeeds or
+`booking_max_wait_minutes` passes (one slot per day). It only fires on days the
+portal actually offers, refreshes the session every `keepalive_minutes`, and
+messages you the result (✅ BOOKED / ❌ FAILED / no slot / ℹ️ not bookable
+yet). Pause it with `/stopautobook`, resume with `/startautobook`.
 
 You can change **which days** and **which slots** it books without editing
 `config.json` by hand: send **`/prefs`** in Telegram and tap through the
@@ -219,11 +236,11 @@ python3 padel_booking.py autobook 2026-09-27 --dry-run
   *available* slots. The court's bookable window is 9am–10pm in 1-hour steps,
   so any of your preferred slots (7–8, 8–9, 9–10pm) may or may not appear
   depending on what's already been booked.
-- The bot books **at/after** midnight (within the 5h race window), so if it
-  was briefly down it will still catch up the same night (while the slot is
-  still free).
-- **Booking limit.** The portal caps you at **3 active bookings** in the
-  7-day window. The bot checks this locally before attempting a booking and
+- The bot books **at/after** the portal opened the date (within
+  `booking_max_wait_minutes`), so if it was briefly down it will still catch
+  up while the slot is still free.
+- **Booking limit.** The portal caps you at **3 active bookings** in its
+  bookable window. The bot checks this locally before attempting a booking and
   skips if the limit is reached. Cancelling a booking immediately frees a
   slot in the window (the cache is refreshed right after).
 

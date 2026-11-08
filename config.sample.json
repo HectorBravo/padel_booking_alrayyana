@@ -12,6 +12,8 @@
   "description": "Padel booking",
   "keepalive_minutes": 20,
   "booking_open_hour": 0,
+  "slot_retry_minutes": 2,
+  "booking_max_wait_minutes": 360,
   "telegram_bot_token": "123456:ABC-your-telegram-bot-token",
   "telegram_chat_ids": [123456789],
   "google_calendar": {

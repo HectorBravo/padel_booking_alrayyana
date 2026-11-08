@@ -35,6 +35,8 @@ from padel_booking import (
     to_api_date, preferred_slots_for_day, pick_best_slot, run_autobook_loop,
     save_config, WEEKDAY_NAME, ts_prefix, refresh_state,
     _slots_endpoint, get_bookings,
+    portal_bookable_dates, window_label, bookable_window_note,
+    _arithmetic_window,
 )
 from google_calendar import (
     sync_booking, sync_cancellation, get_setup_status,
@@ -446,6 +448,8 @@ class PadelBot:
             self._on_slots(chat_id, args)
         elif cmd == "/book":
             self._on_book(chat_id)
+        elif cmd == "/window":
+            self._on_window(chat_id)
         elif cmd == "/mybookings":
             self._on_mybookings(chat_id)
         elif cmd == "/autobook":
@@ -664,6 +668,7 @@ class PadelBot:
                    "/login — start a fresh OTP login\n"
                    "/status — check whether the saved session is valid\n"
                    "/slots [date] — list free slots (or pick a date)\n"
+                   "/window — show the days the portal lets you book\n"
                    "/book — pick a date, then a slot, to book\n"
                    "/mybookings — list your bookings (cancel from here)\n"
                    "/autobook [date] — book a preferred slot (default: +6d)\n"
@@ -671,6 +676,31 @@ class PadelBot:
                    "/stopautobook — stop the background autobooking\n"
                    "/prefs — set the days & preferred slots for autobooking\n"
                    "/start, /help — show this help")
+
+    def _on_window(self, chat_id: int) -> None:
+        """Show the days the portal currently lets you book.
+
+        Read straight from the booking page's "Check in date" picker: those
+        are the only dates the portal will accept, which is why the window can
+        end at today+5 rather than the assumed today+6.
+        """
+        try:
+            dates = portal_bookable_dates(self.cfg, force=True)
+        except RuntimeError as e:
+            self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
+                                f"login.")
+            return
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self._send(chat_id, f"❌ Window lookup failed: {e}")
+            return
+        if not dates:
+            self._send(chat_id, "⚠️ No 'Check in date' list could be read "
+                                "from the booking page, so the bot falls back "
+                                "to today..today+6.")
+            return
+        self._send(chat_id, f"📅 Portal bookable window: "
+                            f"{window_label(dates)} ({len(dates)} days)\n"
+                            + "\n".join(f"  {d:%a %d %b %Y}" for d in dates))
 
     def _on_slots(self, chat_id: int, args: list) -> None:
         if args:
@@ -684,16 +714,47 @@ class PadelBot:
             self._show_date_keyboard(chat_id, "Pick a date:")
 
     def _show_date_keyboard(self, chat_id: int, intro: str) -> None:
-        """Inline keyboard with one button per day, today through today+6."""
-        today = datetime.now().date()
-        buttons = []
-        for i in range(7):
-            d = today + timedelta(days=i)
-            buttons.append([{"text": f"{d:%a %d %b}",
-                             "callback_data": f"date:{d.isoformat()}"}])
-        self._send(chat_id, intro, {"inline_keyboard": buttons})
+        """Inline keyboard with the days the PORTAL actually offers.
+
+        The booking page's "Check in date" picker is authoritative: a date it
+        does not list cannot be booked (its POST is rejected), so offering one
+        would only produce a failed booking. Falls back to today..today+6 when
+        the page gives no parsable picker.
+        """
+        try:
+            dates = portal_bookable_dates(self.cfg)
+        except RuntimeError as e:
+            self._send(chat_id, f"⚠️ {e}\n\nSend /login to start a fresh "
+                                f"login.")
+            return
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            _log(f"[telegram] bookable-window lookup failed: {e}")
+            dates = []
+        if not dates:
+            dates = _arithmetic_window(datetime.now())
+        buttons = [[{"text": f"{d:%a %d %b}",
+                     "callback_data": f"date:{d.isoformat()}"}] for d in dates]
+        self._send(chat_id, f"{intro}\n\nPortal window: "
+                            f"{window_label(dates)} ({len(dates)} days)",
+                   {"inline_keyboard": buttons})
 
     def _show_slots(self, chat_id: int, date: datetime) -> None:
+        # The portal's "Check in date" picker decides which days exist at all;
+        # the slot endpoint answers for dates outside it too, but the booking
+        # POST would be rejected — so refuse before offering any slot.
+        try:
+            offered = portal_bookable_dates(self.cfg)
+        except Exception:  # pylint: disable=broad-exception-caught
+            offered = []
+        if offered and date.date() not in offered:
+            self._send(chat_id, f"🚫 {date:%a %d %b %Y} is not bookable right "
+                                f"now — the portal's 'Check in date' does not "
+                                f"offer it."
+                                + (f"\n\nPortal window: "
+                                   f"{window_label(offered)} "
+                                   f"({len(offered)} days)" if offered else ""))
+            self._show_date_keyboard(chat_id, "Pick a date from the window:")
+            return
         try:
             s, meta = get_booking_meta(self.cfg)
             slots = get_available_slots(s, self.cfg,
@@ -704,7 +765,9 @@ class PadelBot:
                                 f"login.")
             return
         if not slots:
-            self._send(chat_id, f"No free slots on {date:%a %d %b}.")
+            note = bookable_window_note(self.cfg).strip()
+            self._send(chat_id, f"No free slots on {date:%a %d %b}."
+                                + (f"\n\n{note}" if note else ""))
             self._show_date_keyboard(chat_id, "Pick another date:")
             return
         self.pending[chat_id] = {"action": "pick_slot",
@@ -755,6 +818,10 @@ class PadelBot:
                    parse_mode="HTML")
 
     def _on_autobook(self, chat_id: int, args: list) -> None:
+        try:
+            offered = portal_bookable_dates(self.cfg)
+        except Exception:  # pylint: disable=broad-exception-caught
+            offered = []
         if args:
             try:
                 date = parse_date(args[0])
@@ -762,7 +829,20 @@ class PadelBot:
                 self._send(chat_id, f"❌ {e}")
                 return
         else:
-            date = datetime.now() + timedelta(days=6)
+            # Default: the LAST date the portal offers (the freshest one it
+            # opened), instead of assuming today+6.
+            if offered:
+                date = datetime.combine(offered[-1], datetime.min.time())
+            else:
+                date = datetime.now() + timedelta(days=6)
+        if offered and date.date() not in offered:
+            self._send(chat_id, f"🚫 {date:%a %d %b %Y} is not bookable right "
+                                f"now — the portal's 'Check in date' does not "
+                                f"offer it."
+                                + (f"\n\nPortal window: "
+                                   f"{window_label(offered)} "
+                                   f"({len(offered)} days)" if offered else ""))
+            return
         date_str = date.strftime("%Y-%m-%d")
         if already_booked_successfully(date_str):
             self._send(chat_id, f"Already booked {date:%a %d %b} "
@@ -968,10 +1048,18 @@ class PadelBot:
                 _log(f"[telegram] cache refresh failed (non-fatal): {e}")
         else:
             d = datetime.strptime(date_str, "%Y-%m-%d")
+            try:
+                offered = portal_bookable_dates(self.cfg)
+            except Exception:  # pylint: disable=broad-exception-caught
+                offered = []
+            window = (f"\n\nThe portal's window is only "
+                      f"{window_label(offered)} ({len(offered)} days) — that "
+                      f"date is outside it."
+                      if offered and d.date() not in offered else "")
             self._send(chat_id, f"❌ Booking FAILED for {d:%a %d %b %Y} "
                                 f"{slot['label']}.\nThe portal did not create "
                                 f"it (check the daemon/terminal log for the "
-                                f"portal's error).")
+                                f"portal's error).{window}")
 
     # ---- background autobooking (keep-alive + booking race) -------------- #
     def _notify(self, text: str) -> None:

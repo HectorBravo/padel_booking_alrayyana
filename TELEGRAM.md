@@ -101,9 +101,10 @@ terminal. Open your bot in Telegram and send `/start`.
 | `/login` | Start a fresh OTP login — the bot emails the OTP, you reply with the code in chat |
 | `/status` | Check whether the saved portal session is still valid |
 | `/slots [date]` | List free slots for a date (or tap a date button) |
+| `/window` | Show the days the portal currently lets you book (its "Check in date" picker) |
 | `/book` | Pick a date, then a slot, to book (with confirm button) |
 | `/mybookings` | List your portal bookings, with cancel buttons |
-| `/autobook [date]` | Book your best preferred slot for a date (default: today + 6) |
+| `/autobook [date]` | Book your best preferred slot for a date (default: the last day the portal offers) |
 | `/startautobook` | Start the background autobooking |
 | `/stopautobook` | Stop the background autobooking |
 | `/prefs` | Set which days to book and each day's preferred slots (interactive) |
@@ -112,8 +113,9 @@ Dates accept `YYYY-MM-DD`, `DD/MM/YYYY` or `DD-MM-YYYY`.
 
 **The `/book` flow, step by step:**
 
-1. Send `/book` — the bot replies with one button per day (today through
-   today + 6). **Tap a date.**
+1. Send `/book` — the bot replies with one button per day **that the portal
+   actually offers** (its "Check in date" picker, usually today .. today+5/6
+   — `/window` prints the live list). **Tap a date.**
 2. The bot lists the free slots for that day as buttons. **Tap a slot.**
 3. The bot asks "Book 20:00-21:00 on Fri 26 Sep?" — tap **✅ Yes, book**
    (or **❌ No** to abort).
@@ -155,11 +157,15 @@ python padel_booking.py telegram
 
 While it runs, the bot:
 
-- **Books your preferred slot automatically** — every day it checks whether
-  the newly opened date (`today + 6`) is one of the days in your `preferred_slots`
-  map, and if so makes a single attempt to book that day's best free
-  `preferred_slots` entry. If none of your preferred slots are available it
-  stops (it does **not** keep polling for hours) and notifies you.
+- **Books your preferred slot automatically** — it reads the days the portal
+  offers (the "Check in date" picker) instead of assuming `today + 6`, so a
+  date the portal has not opened is never attempted. When the portal starts
+  offering a new date that is one of your `preferred_slots` days, it waits for
+  that day's slots, **refreshing the portal every `slot_retry_minutes`
+  (default 2 min)**, and books the first free preferred slot as soon as one is
+  free. If the day is offered but no preferred slot ever frees up it stops at
+  `booking_max_wait_minutes` and notifies you; if the portal does not offer
+  that day at all it stops immediately (ℹ️ notification).
 - **Alerts you when the session expires** (keep-alive failure) — so you know
   before a booking attempt fails.
 - **Re-logs in automatically**: it requests a new OTP email itself, asks you
@@ -169,7 +175,7 @@ While it runs, the bot:
 - **Notifies you of every booking result** — ✅ BOOKED, or ❌ FAILED with the
   portal's error.
 - **Respects the booking limit** — the portal caps you at 3 active bookings
-  in the 7-day window. The bot checks this before attempting and skips if
+  in its bookable window. The bot checks this before attempting and skips if
   the limit is reached (you'll see an ℹ️ notification). Cancelling a booking
   immediately frees a slot.
 

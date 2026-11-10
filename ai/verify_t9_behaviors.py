@@ -4,6 +4,7 @@ No portal access: every network entry point is patched. Run with:
     python ai/verify_t9_behaviors.py
 """
 import sys
+import threading
 from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
@@ -113,12 +114,12 @@ results.append(scenario(
     expect_outcome="slot_found", expect_booked=1))
 
 # 4. Beyond the rolling window -> stop immediately, no waiting.
-FAR = TODAY + timedelta(days=9)              # today+6 is the last bookable day
+FAR = TODAY + timedelta(days=9)              # past today+6, the widest bound
 results.append(scenario(
-    "OUTSIDE the 7-day window -> stops at once, never waits",
+    "OUTSIDE even the arithmetic window -> stops at once, never waits",
     offered_seq=[[TODAY]],
     slots_seq=[[]],
-    expect_outcome="outside_window", expect_booked=0, target=FAR))
+    expect_outcome="not_yet_open", expect_booked=0, target=FAR))
 
 # --- Bot date keyboard: must offer ONLY the days the portal opened ---------
 class _FakeBot:
@@ -269,7 +270,7 @@ def retry_notice_check():
 
     ok = (len(a) == 1 and oa in ("no_slot", "not_yet_open")
           and len(b) == 0 and ob == "slot_found"
-          and len(c) == 0 and oc == "outside_window")
+          and len(c) == 0 and oc in ("outside_window", "not_yet_open"))
     print(f"[{'PASS' if ok else 'FAIL'}] exactly ONE retry notice per attempt, "
           f"none when it books or refuses at once")
     print(f"        waited 6 refreshes -> notices={len(a)} (outcome={oa}); "
@@ -325,7 +326,7 @@ def picker_ceiling_check():
     # A date the picker DOES offer must still book normally.
     posts_b, out_b = attempt([picker], [[SLOT]], picker[-1])
 
-    ok = (len(posts_a) == 0 and out_a == "outside_window"
+    ok = (len(posts_a) == 0 and out_a == "not_yet_open"
           and len(posts_b) == 1 and out_b == "slot_found")
     print(f"[{'PASS' if ok else 'FAIL'}] date beyond the picker's last option is "
           f"never POSTed (the production 303 bug)")
@@ -351,6 +352,169 @@ def disabled_option_check():
 
 results.append(picker_ceiling_check())
 results.append(disabled_option_check())
+
+# --- THE production case: picker unreadable -> wait, and NEVER post --------
+def unreadable_picker_never_posts_check():
+    """The 11-11-2026 01:12 failure.
+
+    'Check in date' does not offer Tue 17 Nov yet (the server has not opened
+    it), and the bot's read of that picker comes back empty. The slot endpoint
+    still reports 19:00-20:00 free, so the old code POSTed it and got HTTP 303
+    'booking not confirmed (slots still available)'.
+
+    Required behaviour: never submit, but KEEP TRYING every retry_minutes until
+    booking_max_wait_minutes, so the slot is taken the moment the portal opens
+    the day.
+    """
+    today = datetime.now().date()
+    target = today + timedelta(days=6)          # Tue 17 Nov
+    state = {"n": 0}
+    posts, sleeps = [], []
+
+    def offered(cfg, force=False):
+        state["n"] += 1
+        return []                                 # picker unreadable every time
+
+    with patch.object(pb, "get_booking_meta", lambda cfg: (object(), {})), \
+         patch.object(pb, "portal_bookable_dates", offered), \
+         patch.object(pb, "get_available_slots", lambda *a, **k: [SLOT]), \
+         patch.object(pb, "pick_best_slot", lambda sl, pr: SLOT if sl else None), \
+         patch.object(pb, "submit_booking_fast",
+                      lambda *a, **k: posts.append(a) or "303"), \
+         patch.object(pb.time, "sleep", sleeps.append):
+        outcome = pb.run_booking_race(
+            CFG, datetime.combine(target, datetime.min.time()), PREFERRED,
+            wait_for_open=False, max_attempts=4)[3]
+
+    ok = (len(posts) == 0 and outcome == "not_yet_open"
+          and len(sleeps) == 3 and all(s == 120 for s in sleeps))
+    print(f"[{'PASS' if ok else 'FAIL'}] unreadable picker: NEVER posts, but "
+          f"keeps waiting every 2 min")
+    print(f"        posts={len(posts)} outcome={outcome} "
+          f"waits={len(sleeps)}x{sleeps[0] if sleeps else 0}s")
+    return ok
+
+
+def picker_opens_later_books_check():
+    """The payoff: while waiting, the portal opens the day -> it books then."""
+    today = datetime.now().date()
+    target = today + timedelta(days=6)
+    reads = {
+        "n": 0,
+        # refresh 1-2 unreadable, 3 offers ..16 (still no 17), 4 lists 17.
+        "seq": [[], [], [today + timedelta(days=i) for i in range(7)],
+                [target]],
+    }
+    posts = []
+
+    def offered(cfg, force=False):
+        reads["n"] += 1
+        i = min(reads["n"] - 1, len(reads["seq"]) - 1)
+        return reads["seq"][i]
+
+    def slots(s, cfg, api_date, meta):
+        return [] if reads["n"] < 4 else [SLOT]
+
+    with patch.object(pb, "get_booking_meta", lambda cfg: (object(), {})), \
+         patch.object(pb, "portal_bookable_dates", offered), \
+         patch.object(pb, "get_available_slots", slots), \
+         patch.object(pb, "pick_best_slot", lambda sl, pr: SLOT if sl else None), \
+         patch.object(pb, "submit_booking_fast",
+                      lambda *a, **k: posts.append(a) or "200"), \
+         patch.object(pb.time, "sleep", lambda s: None):
+        outcome = pb.run_booking_race(
+            CFG, datetime.combine(target, datetime.min.time()), PREFERRED,
+            wait_for_open=False)[3]
+
+    ok = len(posts) == 1 and outcome == "slot_found"
+    print(f"[{'PASS' if ok else 'FAIL'}] portal opens the day during the wait "
+          f"-> books immediately (posts only once)")
+    print(f"        posts={len(posts)} outcome={outcome}")
+    return ok
+
+
+results.append(unreadable_picker_never_posts_check())
+results.append(picker_opens_later_books_check())
+
+# --- Scheduler: an unopened desired day is retried, then booked ------------
+def scheduler_retries_until_open_check():
+    """run_autobook_loop must not give up on Tue 17 Nov just because the picker
+    has not opened it. It re-attempts on its own cadence and books the moment
+    the portal lists the day."""
+    today = datetime.now().date()
+    tuesday = (1 - today.weekday()) % 7 or 7        # next Tuesday
+    target = today + timedelta(days=tuesday)
+    picker_without = [today + timedelta(days=i) for i in range(0, 6)
+                      if (today + timedelta(days=i)) != target]
+
+    clock = {"t": 1_000_000.0}
+    reads = {"n": 0}
+    posts = []
+    logs = []
+
+    def offered(cfg, force=False):
+        reads["n"] += 1
+        # Open the target only from the 3rd scheduler read onwards.
+        return picker_without if reads["n"] < 3 else [target]
+
+    cfg = {"preferred_slots": {target.strftime("%A"): ["19:00"]},
+           "slot_retry_minutes": 2}
+
+    def fake_sleep(secs):
+        clock["t"] += secs
+
+    real_time = pb.time.time
+    with patch.object(pb, "time") as tmod:
+        tmod.time.side_effect = lambda: clock["t"]
+        tmod.sleep.side_effect = fake_sleep
+        tmod.monotonic.side_effect = lambda: clock["t"]
+        with patch.object(pb, "portal_bookable_dates", offered), \
+             patch.object(pb, "refresh_state", lambda cfg: None), \
+             patch.object(pb, "keepalive", lambda cfg: None), \
+             patch.object(pb, "_fetch_my_bookings_fast", lambda s: []), \
+             patch.object(pb, "get_booking_meta", lambda cfg: (object(), {})), \
+             patch.object(pb, "get_available_slots",
+                          lambda *a, **k: [] if reads["n"] < 3 else [SLOT]), \
+             patch.object(pb, "pick_best_slot",
+                          lambda sl, pr: SLOT if sl else None), \
+             patch.object(pb, "submit_booking_fast",
+                          lambda *a, **k: posts.append(a) or "200"), \
+             patch.object(pb, "verify_booking_created", lambda *a, **k: True), \
+             patch.object(pb, "record_booking", lambda *a, **k: None), \
+             patch.object(pb, "sync_booking", lambda *a, **k: False), \
+             patch.object(pb, "_reconcile_booked", lambda b: None):
+            stop = threading.Event()
+
+            def bookings(s):
+                return []
+
+            # Stop the loop right after the booking lands.
+            orig_race = pb.run_booking_race
+
+            def race(*a, **k):
+                res = orig_race(*a, **k)
+                if res[3] == "slot_found":
+                    stop.set()
+                return res
+
+            with patch.object(pb, "run_booking_race", race), \
+                 patch.object(pb, "_slots_endpoint",
+                              lambda *a, **k: ([], None)):
+                pb.run_autobook_loop(cfg, lambda m: logs.append(m),
+                                     stop_event=stop)
+    del real_time
+
+    ok = len(posts) == 1
+    print(f"[{'PASS' if ok else 'FAIL'}] scheduler keeps trying an unopened "
+          f"day and books it once the portal opens it")
+    print(f"        posts={len(posts)} scheduler_reads={reads['n']} "
+          f"loop_log_lines={len(logs)}")
+    for line in logs[:6]:
+        print(f"          | {line}")
+    return ok
+
+
+results.append(scheduler_retries_until_open_check())
 
 print("\n" + ("ALL PASS" if all(results) else "FAILURES PRESENT"))
 sys.exit(0 if all(results) else 1)

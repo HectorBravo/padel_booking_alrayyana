@@ -111,7 +111,7 @@ Windows.
      "keepalive_minutes": 20,
      "booking_open_hour": 0,
      "slot_retry_minutes": 2,
-     "booking_max_wait_minutes": 360
+     "booking_max_wait_minutes": 720
    }
    ```
    `asset_booking_id` is the number in the booking URL
@@ -128,7 +128,7 @@ Windows.
      but highlights the matching ones in green. Override with `--from HH:MM`.
    - `booking_window_days` – width of the portal's rolling window in days (default 7, i.e. today .. today+6). Dates outside it can never be booked now.
    - `slot_retry_minutes` – how often the bot re-reads the portal while a date inside that window is not opened yet or its slots are not free (default 2).
-   - `booking_max_wait_minutes` – safety cap on one attempt of that wait (default 360 = 6h). The autobooking scheduler then keeps re-attempting as its window triggers fire, so it never gives up on a date inside the window.
+   - `booking_max_wait_minutes` – safety cap on one attempt of that wait (default 720 = 12h). The autobooking scheduler then keeps re-attempting as its window triggers fire, so it never gives up on a date inside the window.
    - `booking_open_hour` – only a micro-optimisation for the day at the far end of the window (sleep until that hour before the first refresh). Set 0 to disable; nothing else depends on it.
    - `keepalive_minutes` – how often the bot refreshes the session.
    - `description` – text stored with the booking.

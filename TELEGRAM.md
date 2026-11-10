@@ -175,7 +175,7 @@ While it runs, the bot:
       closed enters that wait straight away;
     * date **beyond the 7-day window** → stops immediately (🚫), waiting could
       never succeed.
-  Each attempt is bounded by `booking_max_wait_minutes` (default 360 = 6h) and
+  Each attempt is bounded by `booking_max_wait_minutes` (default 720 = 12h) and
   the session is refreshed before every refresh, so hours-long waits stay
   alive.
 - **Alerts you when the session expires** (keep-alive failure) — so you know

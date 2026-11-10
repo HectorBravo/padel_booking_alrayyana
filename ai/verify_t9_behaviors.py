@@ -144,5 +144,54 @@ def keyboard_check():
 
 results.append(keyboard_check())
 
+# --- What happens when the day is open but its slots stay taken? ----------
+def taken_forever_check():
+    """Day offered, no preferred slot EVER free: does it keep hammering, or
+    give up and leave the decision to the scheduler?"""
+    calls = {"book": 0, "sleep": 0}
+
+    def fake_slots(s, cfg, api_date, meta):
+        return []                      # never a free preferred slot
+
+    with patch.object(pb, "get_booking_meta", lambda cfg: (object(), {})), \
+         patch.object(pb, "portal_bookable_dates", lambda cfg, force=False: [TARGET]), \
+         patch.object(pb, "get_available_slots", fake_slots), \
+         patch.object(pb, "submit_booking_fast",
+                      lambda *a, **k: calls.__setitem__("book", calls["book"] + 1)), \
+         patch.object(pb.time, "sleep",
+                      lambda sec: calls.__setitem__("sleep", calls["sleep"] + sec)):
+        best, slots, status, outcome = pb.run_booking_race(
+            CFG, datetime.combine(TARGET, datetime.min.time()), PREFERRED,
+            wait_for_open=False, max_attempts=5)
+
+    ok = (best is None and outcome == "no_slot" and calls["book"] == 0)
+    print(f"[{'PASS' if ok else 'FAIL'}] day open but slots NEVER free -> gives up "
+          f"(outcome=no_slot), books nothing")
+    print(f"        best={best} outcome={outcome} booking_attempts={calls['book']} "
+          f"slept={calls['sleep']}s over 5 refreshes")
+    return ok
+
+
+results.append(taken_forever_check())
+
+# --- The configured default wait is 12 hours ------------------------------
+def default_wait_check():
+    """With no booking_max_wait_minutes in cfg, the bound must be
+    BOOKING_MAX_WAIT_MINUTES (720 min = 12h), not the old 360. Computed exactly
+    as run_booking_race computes it."""
+    cfg = {}                       # empty -> every default applies
+    retry_secs = max(1, int(cfg.get("slot_retry_minutes", 2))) * 60
+    timeout = max(retry_secs, int(cfg.get(
+        "booking_max_wait_minutes", pb.BOOKING_MAX_WAIT_MINUTES)) * 60)
+
+    ok = pb.BOOKING_MAX_WAIT_MINUTES == 720 and timeout == 720 * 60
+    print(f"[{'PASS' if ok else 'FAIL'}] default booking_max_wait_minutes is 12h")
+    print(f"        BOOKING_MAX_WAIT_MINUTES={pb.BOOKING_MAX_WAIT_MINUTES} "
+          f"-> timeout={timeout}s ({timeout // 3600}h)")
+    return ok
+
+
+results.append(default_wait_check())
+
 print("\n" + ("ALL PASS" if all(results) else "FAILURES PRESENT"))
 sys.exit(0 if all(results) else 1)

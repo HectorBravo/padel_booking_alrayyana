@@ -4,6 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 11-11-2026 00:52:00 | [T11: Default booking_max_wait_minutes to 12h](#task-t11-default-booking_max_wait_minutes-to-12h) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 0/5 | 0m | none |
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m | none |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
 
@@ -250,6 +251,58 @@ None yet.
 - **Base**: `d5e90ab` (current `main` HEAD). **Branch**: create `fix/ai-portal-session-timeout-90s` from `main`, push, open PR, merge to `main`, confirm the `Build and Push Docker Image` workflow run succeeds.
 - **Production**: `docker` is NOT on this dev machine. After the merge rebuilds `hecbr/padel-booking-alrayyana` on Docker Hub, the production host must run `docker compose pull && docker compose up -d` to activate the new image (entrypoint re-syncs `.py` on start).
 - **Git identity**: override only `GIT_AUTHOR_NAME="AI_bot"` and `GIT_COMMITTER_NAME="AI_bot"`; do NOT set author/committer email (use the user's `git config user.email`). Commit tag format `fix(portal): [ai] ...` / `docs(ai): ...`. Push the task log to the user's current branch (`main`).
+
+---
+
+## Task T11: Default booking_max_wait_minutes to 12h
+
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
+- **Created**: 11-11-2026 00:52:00
+- **Last Updated**: 11-11-2026 00:52:00
+- **Time Spent**: 0m
+- **Branch**: [`feat/ai-booking-max-wait-12h`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/feat/ai-booking-max-wait-12h)
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - User asked for the default `booking_max_wait_minutes` to become **720 (12h)** instead of 360 (6h).
+  - The value `360` was hardcoded as a fallback in **four** places (`padel_booking.py:2095, 2215, 2422, 2621`) — three are user-facing log/notification strings, one is the real bound. Changing only one would silently desync the messages from actual behavior, so all four must move together.
+  - Fix introduces a single module constant `BOOKING_MAX_WAIT_MINUTES = 720` next to `BOOKING_WINDOW_DAYS` (`:823`) and makes every call site reference it — same pattern already used for `PORTAL_TIMEOUT` / `MYBOOKINGS_TIMEOUT`.
+  - Docs that quote "default 360 = 6h" are updated too: `README.md:114,131`, `TELEGRAM.md:178`, `config.sample.json:17`, and the `run_booking_race` docstring at `padel_booking.py:2080`.
+  - **No host config change needed**: the user's `config.json` does not set this key, so it inherits the new default automatically. Anyone who *did* set 360 explicitly keeps 360 (explicit config always wins).
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+None.
+
+**Confirmed (user provided):**
+
+- (11-11-2026 ~00:52) "make the default for booking_max_wait_minutes equal to 12 hours" → implemented as a constant, default 720.
+
+### Subtasks / Plan
+
+- [ ] Add `BOOKING_MAX_WAIT_MINUTES = 720` constant
+- [ ] Replace all four hardcoded `360` fallbacks with the constant
+- [ ] Update `config.sample.json`, `README.md`, `TELEGRAM.md` and docstrings
+- [ ] Verify: `py_compile` + assert the effective default is 720, plus re-run `ai/verify_t9_behaviors.py` (6 checks)
+- [ ] Deploy: PR → merge to `main` → confirm image rebuild; then host `docker compose pull && up -d`
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: Self-contained knowledge base to resume T11 without other context.
+
+- **Base**: `main` (T9/T10 already merged, PR #7 / merge `33d261b`). Branch created from it: `feat/ai-booking-max-wait-12h`.
+- **Exact call sites of the old literal 360** (content anchors; verify before editing):
+  - `padel_booking.py` `run_booking_race` — `timeout = max(retry_secs, int(cfg.get("booking_max_wait_minutes", 360)) * 60)` — the ONLY functional use.
+  - `cmd_autobook` — `maxw = int(cfg.get("booking_max_wait_minutes", 360))` (printed in messages).
+  - `book_day` inside `run_autobook_loop` — `not_yet_open` log line.
+  - `run_autobook_loop` startup log — "up to N min each".
+- **Semantics reminder**: this bounds ONE `run_booking_race` attempt, not the whole program. The scheduler (`run_autobook_loop`) re-attempts on its three triggers (start / prefs change / new date offered), so a taken day still stops after one bounded attempt — see T10 notes and the 6th check in `ai/verify_t9_behaviors.py`.
+- **Verification command**: `python -c "import padel_booking as p; print(p.BOOKING_MAX_WAIT_MINUTES)"` → 720. Then re-run `python ai/verify_t9_behaviors.py` → ALL PASS (the harness passes an explicit CFG, so it must stay green unchanged).
+- **Deploy**: same flow as T10 — PR to `main`, watch the `Build and Push Docker Image` run to success, then the user runs `docker compose pull && docker compose up -d` on the host (`docker` absent on this dev machine).
+- **Git identity**: only `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` = `AI_bot`; never set email; `[ai]` tag after the colon; task log committed to the user's current branch (`main`).
 
 ---
 

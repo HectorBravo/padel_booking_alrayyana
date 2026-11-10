@@ -4,6 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 11-11-2026 01:04:22 | [T13: Treat the picker as the real window limit (7-day assumption is wrong)](#task-t13-treat-the-picker-as-the-real-window-limit-7-day-assumption-is-wrong) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 0/6 | 0m | none |
 | 11-11-2026 00:50:01 | [T12: Telegram notice on first retry while a day is unavailable](#task-t12-telegram-notice-on-first-retry-while-a-day-is-unavailable) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 8m | none |
 | 11-11-2026 00:52:00 | [T11: Default booking_max_wait_minutes to 12h](#task-t11-default-booking_max_wait_minutes-to-12h) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 7m | none |
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m | none |
@@ -252,6 +253,60 @@ None yet.
 - **Base**: `d5e90ab` (current `main` HEAD). **Branch**: create `fix/ai-portal-session-timeout-90s` from `main`, push, open PR, merge to `main`, confirm the `Build and Push Docker Image` workflow run succeeds.
 - **Production**: `docker` is NOT on this dev machine. After the merge rebuilds `hecbr/padel-booking-alrayyana` on Docker Hub, the production host must run `docker compose pull && docker compose up -d` to activate the new image (entrypoint re-syncs `.py` on start).
 - **Git identity**: override only `GIT_AUTHOR_NAME="AI_bot"` and `GIT_COMMITTER_NAME="AI_bot"`; do NOT set author/committer email (use the user's `git config user.email`). Commit tag format `fix(portal): [ai] ...` / `docs(ai): ...`. Push the task log to the user's current branch (`main`).
+
+---
+
+## Task T13: Treat the picker as the real window limit (7-day assumption is wrong)
+
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span>
+- **Created**: 11-11-2026 01:04:22
+- **Last Updated**: 11-11-2026 01:04:22
+- **Time Spent**: 0m
+- **Branch**: pending
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - **User evidence (production, 11-11-2026 00:56:46)**: `*** Booking Tue 17 Nov 2026 ... *** FAILED to book 19:00-20:00 [...]: booking not confirmed (slots still available, HTTP 303) [race: 0.40s]`.
+  - **User then supplied the missing fact**: on `/asset/assetbooking/370` the "Check in date" picker currently offers **10 Nov .. 16 Nov** — i.e. 17 Nov is *not selectable*, so its window is not open yet.
+  - **The new code IS deployed** (proved): startup printed `(portal window Wed 11 Nov .. Tue 17 Nov 2026)`; pre-T9 logged the same line with no window at all (`git show 2434815:padel_booking.py`). T9–T12 are live.
+  - **Corrected root cause — T9's central assumption is false.** `BOOKING_WINDOW_DAYS = 7` (and `rolling_window_dates()` → `today .. today+6`) is used as the **hard bookable limit**, and `run_booking_race` only returns `outside_window` when the target falls outside it. But the picker proves the real limit is **not** `today+6`: today is 11 Nov, yet the picker stops at **16 Nov (today+5)**. 17 Nov is therefore *inside* the assumed window → the race never says "outside", treats the date as merely "not open yet" — and because the slot endpoint answers for closed dates, it submitted the booking instead of waiting. The 0.40s race time and the absence of any "refreshing in 2 min" line match: one refresh, slot looked free, POST sent, portal rejected it (HTTP 303).
+  - **In short**: `today .. today+6` is a *superset* of what is actually bookable. Anything beyond the picker's last date can never be booked now and must be reported as such, not waited for.
+  - **Secondary defect found while probing** (synthetic markup): `<option ... disabled>` is counted as bookable by `parse_booking_dates.collect()` — a greyed-out date would still look open even once the picker is read correctly.
+  - **Fix direction**: make the **picker's own last date** the effective hard limit when it is readable (fall back to `today + booking_window_days - 1` only when it is not), so an unopened far date yields `outside_window` → honest "not bookable yet" instead of a doomed POST; and ignore `disabled` options.
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+None.
+
+**Confirmed (user provided):**
+
+- (11-11-2026 ~00:59) Production still attempted 17 Nov; log quoted; asked to reevaluate why and fix it.
+- (11-11-2026 ~01:04) "the selected values for the 'Check in date' are only from the 10th to the 16th right now. So this indicates that the window for the 17th is not yet open" → the picker's last offered date, not `today+6`, is the real limit.
+
+### Subtasks / Plan
+
+- [ ] Make the effective hard limit = picker's last offered date when readable (`window_limit` / a new helper), keeping `booking_window_days` only as the unreadable-picker fallback
+- [ ] `run_booking_race`: return `outside_window` for dates beyond that effective limit (never POST them)
+- [ ] Ignore `<option disabled>` in `parse_booking_dates`
+- [ ] Keep "wait until open" correct for dates **inside** the picker's range whose slots are not free yet
+- [ ] Regression test: picker = 10..16 Nov, target 17 Nov → must NOT submit (and disabled options excluded)
+- [ ] Verify: `py_compile`, full harness, PR → merge → image rebuild; then host `docker compose pull && up -d`
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: Self-contained knowledge base to resume T13 without other context.
+
+- **Base**: `main` at `9231ec6` (T9–T12 merged; PRs #7–#9).
+- **Live config** (`config.json`, gitignored): `asset_booking_id=370`; `booking_window_days` ABSENT → default 7; `preferred_slots` keys `sunday, tuesday, saturday`. On 11 Nov (Wed) the in-window occurrences are Sun 15 and Tue 17 — matching the log order (17 attempted first as "freshest", 15 skipped as already booked).
+- **Key anchors** (`padel_booking.py`): `BOOKING_WINDOW_DAYS:823`; `rolling_window_dates:~838`; `window_limit:~848`; `in_booking_window`; `booking_window_days(cfg):~829`; `_option_date:695`; `parse_booking_dates:731` (`collect()` reads `opt.get("value")` then `opt.get_text()`, ignores `disabled`); `run_booking_race` hard-limit check at the top of its loop (returns `outside_window`) and the `opened = not offered or target_date in offered` line; `bookable_targets`; startup notice `if not window_dates: window_dates = rolling_window_dates(...)`.
+- **Do not regress**: when the picker is unreadable (`[]`), the bot must keep working via arithmetic (never "nothing is bookable"); `/window`, `_show_date_keyboard`, `_show_slots` and the autobook triggers all consume these helpers. The wait-until-open behavior for *in-range* dates must stay (T9/T10 checks).
+- **Semantics to implement**: effective_last = max(picker dates) when picker non-empty else `today + booking_window_days - 1`. A target after effective_last → `outside_window` (log "not open yet / cannot be booked now", no POST). A target within → existing wait/retry logic.
+- **Harness**: `ai/verify_t9_behaviors.py` (9 checks green before this task). Add the reproduction: picker `[10..16 Nov]`, target 17 Nov, `submit_booking_fast` must not be called; plus a disabled-option parse case.
+- **Deploy**: PR → merge `main` → watch `Build and Push Docker Image` → user runs `docker compose pull && docker compose up -d`.
+- **Git identity**: only `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` = `AI_bot`; never set email; `[ai]` tag after the colon; task log committed to the user's current branch (`main`).
 
 ---
 

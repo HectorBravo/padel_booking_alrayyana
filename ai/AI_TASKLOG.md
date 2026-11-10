@@ -4,25 +4,22 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 0/6 | 0m | none |
-| 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | [T10](#task-t10-deploy-the-t9-fix--it-was-never-merged) |
-| 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m | none |
-| 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m | none |
-| 10-04-2026 15:10:00 | [T3: Install nano in Docker image](#task-t3-install-nano-in-docker-image) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 5m | none |
+| 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m | none |
+| 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
 
-> ✅ **8 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **10 completed task(s)** — [View completed tasks](#completed-tasks)
 
 ---
 
 ## Task T9: Derive bookable days from the portal
 
-- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 09-11-2026 00:41:06
 - **Last Updated**: 09-11-2026 01:14:00
 - **Time Spent**: 25m
 - **Branch**: [`fix/ai-portal-bookable-dates`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-portal-bookable-dates)
-- **Commit(s)**: code [fefb096](https://github.com/HectorBravo/padel_booking_alrayyana/commit/fefb0964aef88a0168f7f44bd9a82eb5ea0bee63) (round 1 — portal-derived dates, 2-min refresh) and [9d0d2c4](https://github.com/HectorBravo/padel_booking_alrayyana/commit/9d0d2c48c033b8a0d54689ef27f90297d1a2c2fc) (round 2 — 7-day hard limit, wait-until-open), both on the AI branch · log [535741a](https://github.com/HectorBravo/padel_booking_alrayyana/commit/535741a03f5f682ba486fde7efbd3f9801c93c79), [db36422](https://github.com/HectorBravo/padel_booking_alrayyana/commit/db364228038f815f886c53fb8ba7267950bcaa2e), [1b7311b](https://github.com/HectorBravo/padel_booking_alrayyana/commit/1b7311b), [5c53bae](https://github.com/HectorBravo/padel_booking_alrayyana/commit/5c53bae) on `main` and [bf6d822](https://github.com/HectorBravo/padel_booking_alrayyana/commit/bf6d822) on the AI branch — **not yet merged** (see the pending merge note)
+- **Commit(s)**: code [fefb096](https://github.com/HectorBravo/padel_booking_alrayyana/commit/fefb0964aef88a0168f7f44bd9a82eb5ea0bee63) (round 1 — portal-derived dates, 2-min refresh) and [9d0d2c4](https://github.com/HectorBravo/padel_booking_alrayyana/commit/9d0d2c48c033b8a0d54689ef27f90297d1a2c2fc) (round 2 — 7-day hard limit, wait-until-open), both on the AI branch · log [535741a](https://github.com/HectorBravo/padel_booking_alrayyana/commit/535741a03f5f682ba486fde7efbd3f9801c93c79), [db36422](https://github.com/HectorBravo/padel_booking_alrayyana/commit/db364228038f815f886c53fb8ba7267950bcaa2e), [1b7311b](https://github.com/HectorBravo/padel_booking_alrayyana/commit/1b7311b), [5c53bae](https://github.com/HectorBravo/padel_booking_alrayyana/commit/5c53bae) on `main` and [bf6d822](https://github.com/HectorBravo/padel_booking_alrayyana/commit/bf6d822) on the AI branch — **merged to `main`** on 11-11-2026 via [PR #7](https://github.com/HectorBravo/padel_booking_alrayyana/pull/7) (merge `33d261b`), which rebuilt the production image; see [T10](#task-t10-deploy-the-t9-fix--it-was-never-merged). Until then the code existed only on the AI branch, so production never changed.
 - **Blockers**: none
 - **Findings & Notes**:
   - **Symptom (user report, 09-11-2026)**: the portal's "Check in date" dropdown at `/asset/assetbooking/370` only offers dates up to **14 Nov 2026**, but the Telegram bot offers **15 Nov** and the booking then fails.
@@ -258,13 +255,13 @@ None yet.
 
 ## Task T10: Deploy the T9 fix — it was never merged
 
-- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span>
 - **Created**: 11-11-2026 00:28:43
-- **Last Updated**: 11-11-2026 00:28:43
-- **Time Spent**: 0m
+- **Last Updated**: 11-11-2026 00:33:27
+- **Time Spent**: 5m
 - **Branch**: [`fix/ai-deploy-portal-bookable-dates`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-deploy-portal-bookable-dates)
-- **Commit(s)**: pending
+- **Commit(s)**: [9716769](https://github.com/HectorBravo/padel_booking_alrayyana/commit/9716769) (verification harness, on the AI branch) · merge [33d261b](https://github.com/HectorBravo/padel_booking_alrayyana/commit/33d261b) (PR #7 → `main`) · T9 code now on `main` via [695baee](https://github.com/HectorBravo/padel_booking_alrayyana/commit/695baee)
 - **Blockers**: none
 - **Findings & Notes**:
   - **The user's report is correct, and the cause is not a bad fix — it is an unmerged one.** [T9](#task-t9-derive-bookable-days-from-the-portal) implemented everything requested, but its code commits (`fefb096`, `9d0d2c4`) live **only** on `fix/ai-portal-bookable-dates`. `git merge-base --is-ancestor origin/fix/ai-portal-bookable-dates origin/main` → exit 1 (**not merged**). Only the *task-log* commits from T9 landed on `main`, which is why the log looked finished while production never changed.
@@ -287,12 +284,24 @@ None.
 
 ### Subtasks / Plan
 
-- [ ] Confirm `origin/fix/ai-portal-bookable-dates` is not an ancestor of `main` (done pre-log: exit 1)
-- [ ] Merge the T9 code into `main` via PR so the Docker image rebuilds from it
-- [ ] Confirm the `Build and Push Docker Image` workflow run succeeds on the merge
-- [ ] Re-verify post-merge that `main` contains `portal_bookable_dates`, the portal-driven date keyboard, and the wait-until-open loop
-- [ ] Record verification of both behaviors (bot offers only opened days; autobook retries until open) with file:line evidence
+- [x] Confirm `origin/fix/ai-portal-bookable-dates` is not an ancestor of `main` (exit 1 before the merge → confirmed unmerged)
+- [x] Merge the T9 code into `main` via PR so the Docker image rebuilds from it — [PR #7](https://github.com/HectorBravo/padel_booking_alrayyana/pull/7), merged as `33d261b`
+- [x] Confirm the `Build and Push Docker Image` workflow run succeeds on the merge — run `42896328459` ✓ (all steps green, image republished)
+- [x] Re-verify post-merge that `main` contains `portal_bookable_dates`, the portal-driven date keyboard, and the wait-until-open loop — `padel_booking.py:792`, `padel_telegram.py:731`, retry log at `padel_booking.py:2165`; `py_compile` clean
+- [x] Record verification of both behaviors with executable evidence — `ai/verify_t9_behaviors.py`, **ALL PASS** (5 checks, see Full Context Notes)
 - [ ] (user) On the production host: `docker compose pull && docker compose up -d` to activate the new image
+
+### Verification results (`python ai/verify_t9_behaviors.py`)
+
+Network-free harness: every portal entry point is patched, so it runs anywhere.
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| In-window day NOT OPEN YET → keeps waiting, never books | PASS | `outcome=not_yet_open`, 0 booking attempts, slept 840s over 7 refreshes (2 min each), keepalive ran 7× |
+| Portal opens the day on the 3rd refresh → books then | PASS | `outcome=slot_found`, 1 booking attempt after 2 waits |
+| Day open but slot taken, then free → books when free | PASS | `outcome=slot_found`, retried twice before booking |
+| Date beyond the 7-day window → stops at once, no waiting | PASS | `outcome=outside_window`, 0 attempts, 0s slept |
+| Bot date keyboard offers ONLY portal-opened days | PASS | 4 of 7 window days opened → exactly those 4 buttons |
 
 ### Full Context Notes for AI Agents
 
@@ -520,6 +529,8 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
+| 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m |
+| 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m |
 | 09-11-2026 00:26:36 | [T8: Merge and delete three AI branches](#task-t8-merge-and-delete-three-ai-branches) | <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span> | 7/7 | 5m |
 | 11-10-2026 15:50:19 | [T7: Diagnose OTP login hang; session check via /dashboard](#task-t7-diagnose-otp-login-hang-session-check-via-dashboard) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 8/10 | 17m |
 | 08-10-2026 01:47:09 | [T6: Raise portal-wide session timeout to 90s](#task-t6-raise-portal-wide-session-timeout-to-90s) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 10m |

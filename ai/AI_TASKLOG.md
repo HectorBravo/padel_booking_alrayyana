@@ -4,7 +4,8 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
+| 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 0/6 | 0m | none |
+| 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | [T10](#task-t10-deploy-the-t9-fix--it-was-never-merged) |
 | 10-04-2026 14:47:00 | [T1: Reconcile booked.json against portal](#task-t1-reconcile-bookedjson-against-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/4 | 15m | none |
 | 10-04-2026 14:47:00 | [T2: Google Calendar sync integration](#task-t2-google-calendar-sync-integration) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 6/6 | 20m | none |
 | 10-04-2026 15:10:00 | [T3: Install nano in Docker image](#task-t3-install-nano-in-docker-image) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 5m | none |
@@ -255,8 +256,59 @@ None yet.
 
 ---
 
-## Task T5: Increase mybookings timeout to 90s
-## Task T5: Increase mybookings timeout to 90s
+## Task T10: Deploy the T9 fix — it was never merged
+
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span>
+- **Created**: 11-11-2026 00:28:43
+- **Last Updated**: 11-11-2026 00:28:43
+- **Time Spent**: 0m
+- **Branch**: [`fix/ai-deploy-portal-bookable-dates`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-deploy-portal-bookable-dates)
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - **The user's report is correct, and the cause is not a bad fix — it is an unmerged one.** [T9](#task-t9-derive-bookable-days-from-the-portal) implemented everything requested, but its code commits (`fefb096`, `9d0d2c4`) live **only** on `fix/ai-portal-bookable-dates`. `git merge-base --is-ancestor origin/fix/ai-portal-bookable-dates origin/main` → exit 1 (**not merged**). Only the *task-log* commits from T9 landed on `main`, which is why the log looked finished while production never changed.
+  - **Proof production runs the old code**: searching `main`'s two `.py` files for `parse_bookable|bookable_dates|/window|cmd_window` → **0 matches**. The whole portal-derived-window feature is absent from `main`, so the deployed image still offers `today..today+6` in the bot and never waits for a date to open.
+  - **Why a restart cannot help**: `entrypoint.sh` re-copies the `.py` files from `/opt/padel` (the image, built off `main`) into `/app` on every start. Only a merge + image rebuild activates T9.
+  - **Both behaviors the user asked to verify ARE implemented on the branch** (read at `af33dcc`; both files pass `py_compile`):
+    - *Bot offers only portal-opened days*: `padel_telegram.py:_show_date_keyboard:731-758` builds the keyboard from `portal_bookable_dates(self.cfg)` instead of `for i in range(7)`; `_show_slots:760-786` refuses an unopened date before offering slots; `/window` (`:683-718`) marks each day `bookable` / `NOT OPEN YET`.
+    - *Autobooking waits until the day opens*: `padel_booking.py:run_booking_race:2122-2174` refreshes every `slot_retry_minutes` (default 2) with session keepalive and books as soon as a preferred slot is free; it hard-stops only for dates outside the rolling window.
+  - **Config note**: `slot_retry_minutes` / `booking_max_wait_minutes` are new on the branch (`config.sample.json:16-17`) and absent from the host's `config.json`; both have safe in-code defaults (2 min / 360 min), so no host config edit is needed.
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+None.
+
+**Confirmed (user provided):**
+
+- (11-11-2026 ~00:28) "you didn't fix my request with the last commits … still no option to book for the 17th on the web but the bot offers it; verify it will autobook until the day opens" → root cause is the unmerged T9 branch; deploying it is the fix.
+
+### Subtasks / Plan
+
+- [ ] Confirm `origin/fix/ai-portal-bookable-dates` is not an ancestor of `main` (done pre-log: exit 1)
+- [ ] Merge the T9 code into `main` via PR so the Docker image rebuilds from it
+- [ ] Confirm the `Build and Push Docker Image` workflow run succeeds on the merge
+- [ ] Re-verify post-merge that `main` contains `portal_bookable_dates`, the portal-driven date keyboard, and the wait-until-open loop
+- [ ] Record verification of both behaviors (bot offers only opened days; autobook retries until open) with file:line evidence
+- [ ] (user) On the production host: `docker compose pull && docker compose up -d` to activate the new image
+
+### Full Context Notes for AI Agents
+
+- **State at start (11-11-2026 00:28)**: `main` = `358a739`; `origin/fix/ai-portal-bookable-dates` = `af33dcc` (docs only) over `9d0d2c4` (code round 2) over `fefb096` (code round 1). Working tree clean; the T9 branch exists only under `remotes/origin/`.
+- **Why a PR is required**: previous fixes reached production via PRs #4/#5/#6 → merge to `main` → `.github/workflows/docker-publish.yml` republishes `hecbr/padel-booking-alrayyana:latest`. Reproduce that exactly; do not re-implement T9.
+- **Inspecting the branch safely**: `git worktree add C:\temp\t9wt origin/fix/ai-portal-bookable-dates --detach` (created; clean up with `git worktree remove C:\temp\t9wt`). Avoid `git show … > file` in PowerShell — it emits UTF-16 and `py_compile` then fails with "source code string cannot contain null bytes".
+- **Verification done**: `python -m py_compile padel_booking.py padel_telegram.py` on the branch files → both exit 0.
+- **Key anchors at `af33dcc`**:
+  - `padel_booking.py`: `portal_bookable_dates:792`, `_bookable_dates_cached/_store:778-789` (TTL 60s), option parsing `:736-776`, `window_limit:846`, `bookable_window_note:868`, `cmd_window:1049`, `bookable_targets` (candidacy = rolling window; picker only orders), `run_booking_race:2049-2174`, autobook loop `:2290+` (`outside_window` → stop, `not_yet_open` → retry later).
+  - `padel_telegram.py`: imports `portal_bookable_dates, window_label, bookable_window_note` at `:38`; `/window` `:683-718`; `_show_date_keyboard:731-758`; `_show_slots:760-786`; `_on_autobook:849+`.
+- **Post-merge check (must pass)**: `git merge-base --is-ancestor origin/fix/ai-portal-bookable-dates origin/main` → exit 0, and `portal_bookable_dates` present in `main:padel_booking.py`.
+- **Production step is user-side**: `docker` is not installed here. After the rebuild the host runs `docker compose pull && docker compose up -d`; `entrypoint.sh` re-syncs the `.py` files into `/app`, activating the new behavior at that restart.
+- **Git identity**: override only `GIT_AUTHOR_NAME="AI_bot"` / `GIT_COMMITTER_NAME="AI_bot"`; never set author/committer email (user's is `hbravo@cuic.net`). Commit tag `[ai]` after the colon. Task log goes to the user's current branch (`main`).
+
+---
+
 
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>

@@ -221,5 +221,55 @@ def config_override_check():
 
 results.append(config_override_check())
 
+# --- One "still trying" notice per attempt, never one per refresh ----------
+def retry_notice_check():
+    """The user must see in Telegram that a day is being waited for, WITHOUT
+    getting a message every 2 minutes: on_retry fires exactly once per race."""
+    def run(offered_seq, slots_seq, max_attempts=6, target=None):
+        target = target or TARGET
+        notices = []
+        state = {"n": 0}
+
+        def offered(cfg, force=False):
+            state["n"] += 1
+            i = min(state["n"] - 1, len(offered_seq) - 1)
+            return offered_seq[i]
+
+        def slots(s, cfg, api_date, meta):
+            i = min(state["n"] - 1, len(slots_seq) - 1)
+            return slots_seq[i]
+
+        with patch.object(pb, "get_booking_meta", lambda cfg: (object(), {})), \
+             patch.object(pb, "portal_bookable_dates", offered), \
+             patch.object(pb, "get_available_slots", slots), \
+             patch.object(pb, "pick_best_slot",
+                          lambda sl, pref: SLOT if sl else None), \
+             patch.object(pb, "submit_booking_fast", lambda *a, **k: "200"), \
+             patch.object(pb.time, "sleep", lambda sec: None):
+            outcome = pb.run_booking_race(
+                CFG, datetime.combine(target, datetime.min.time()), PREFERRED,
+                wait_for_open=False, max_attempts=max_attempts,
+                on_retry=notices.append)[3]
+        return notices, outcome
+
+    not_open = [TODAY + timedelta(days=i) for i in range(5)]   # never TARGET
+
+    a, oa = run([not_open], [[]])                              # waits each time
+    b, ob = run([[TARGET]], [[SLOT]])                          # books at once
+    c, oc = run([[TODAY]], [[]], target=TODAY + timedelta(days=9))  # too far
+
+    ok = (len(a) == 1 and oa == "not_yet_open"
+          and len(b) == 0 and ob == "slot_found"
+          and len(c) == 0 and oc == "outside_window")
+    print(f"[{'PASS' if ok else 'FAIL'}] exactly ONE retry notice per attempt, "
+          f"none when it books or refuses at once")
+    print(f"        waited 6 refreshes -> notices={len(a)} (outcome={oa}); "
+          f"immediate book -> notices={len(b)} (outcome={ob}); outside window "
+          f"-> notices={len(c)} (outcome={oc})")
+    return ok
+
+
+results.append(retry_notice_check())
+
 print("\n" + ("ALL PASS" if all(results) else "FAILURES PRESENT"))
 sys.exit(0 if all(results) else 1)

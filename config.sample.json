@@ -14,7 +14,7 @@
   "booking_window_days": 7,
   "booking_open_hour": 0,
   "slot_retry_minutes": 2,
-  "booking_max_wait_minutes": 360,
+  "booking_max_wait_minutes": 720,
   "telegram_bot_token": "123456:ABC-your-telegram-bot-token",
   "telegram_chat_ids": [123456789],
   "google_calendar": {

@@ -822,6 +822,13 @@ def portal_bookable_dates(cfg: dict, force: bool = False) -> list:
 #     refreshing (the window slides forward) until it opens and a slot is free.
 BOOKING_WINDOW_DAYS = 7        # default window width, config: booking_window_days
 
+# Default cap on ONE wait for a date to open and a preferred slot to free up,
+# in minutes (config: booking_max_wait_minutes). It bounds a single
+# run_booking_race attempt, not the program: the autobooking scheduler
+# re-attempts as its window triggers fire. 720 = 12h, long enough to cover an
+# overnight wait for the portal's window to slide onto a target day.
+BOOKING_MAX_WAIT_MINUTES = 720
+
 
 def booking_window_days(cfg: dict) -> int:
     """Width of the portal's rolling window in days (default 7)."""
@@ -2077,7 +2084,7 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
         responsive during a long wait).
 
     ``timeout`` bounds the whole loop and defaults to
-    ``booking_max_wait_minutes`` (360 = 6h); ``max_attempts`` (default:
+    ``booking_max_wait_minutes`` (720 = 12h); ``max_attempts`` (default:
     unlimited) caps the refreshes instead, so a single check is ``max_attempts=1``.
 
     Returns (slot, all_slots, status_or_None, outcome). With dry_run=True the
@@ -2093,7 +2100,7 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
     retry_secs = max(1, int(retry_minutes)) * 60
     if timeout is None:
         timeout = max(retry_secs, int(cfg.get("booking_max_wait_minutes",
-                                             360)) * 60)
+                                              BOOKING_MAX_WAIT_MINUTES)) * 60)
     now = datetime.now()
 
     # Pre-warm the shared session + booking meta (lowers the booking latency):
@@ -2212,7 +2219,7 @@ def cmd_autobook(cfg: dict, args: list) -> None:
               f"booked.json). Not booking again.")
         return
     retry = int(cfg.get("slot_retry_minutes", 2))
-    maxw = int(cfg.get("booking_max_wait_minutes", 360))
+    maxw = int(cfg.get("booking_max_wait_minutes", BOOKING_MAX_WAIT_MINUTES))
     best, slots, r, outcome = run_booking_race(
         cfg, target, preferred, dry_run=dry_run)
     if outcome == "outside_window":
@@ -2419,7 +2426,7 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                 log(f"*** {target:%a %d %b %Y} is inside the window but the "
                     f"portal has not opened it yet (refreshed every "
                     f"{int(cfg.get('slot_retry_minutes', 2))} min for up to "
-                    f"{int(cfg.get('booking_max_wait_minutes', 360))} min); "
+                    f"{int(cfg.get('booking_max_wait_minutes', BOOKING_MAX_WAIT_MINUTES))} min); "
                     f"nothing was attempted.")
                 notify_(f"ℹ️ {target:%a %d %b}: the portal has not opened it "
                         f"yet — the bot books it as soon as it opens.")
@@ -2618,7 +2625,7 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                 log(f"Startup: portal has not opened "
                     f"{window_label(not_open)} yet — waiting for them "
                     f"(refreshing every {int(cfg.get('slot_retry_minutes', 2))} "
-                    f"min, up to {int(cfg.get('booking_max_wait_minutes', 360))} "
+                    f"min, up to {int(cfg.get('booking_max_wait_minutes', BOOKING_MAX_WAIT_MINUTES))} "
                     f"min each).")
             for target in candidates:
                 book_day(target, now)

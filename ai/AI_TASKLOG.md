@@ -4,6 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 11-11-2026 02:50:02 | [T15: Merge every AI branch into main and delete them](#task-t15-merge-every-ai-branch-into-main-and-delete-them) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span> | 5/5 | 4m | none |
 | 11-11-2026 01:14:00 | [T14: Stop POSTing unopened dates (fail-closed) and keep retrying them](#task-t14-stop-posting-unopened-dates-fail-closed-and-keep-retrying-them) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 6/6 | 11m | none |
 | 11-11-2026 01:04:22 | [T13: Treat the picker as the real window limit (7-day assumption is wrong)](#task-t13-treat-the-picker-as-the-real-window-limit-7-day-assumption-is-wrong) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 14m | none |
 | 11-11-2026 00:50:01 | [T12: Telegram notice on first retry while a day is unavailable](#task-t12-telegram-notice-on-first-retry-while-a-day-is-unavailable) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 8m | none |
@@ -11,7 +12,79 @@
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m | none |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
 
-> ✅ **14 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **15 completed task(s)** — [View completed tasks](#completed-tasks)
+
+---
+
+## Task T15: Merge every AI branch into main and delete them
+
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
+- **Type**: <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span>
+- **Created**: 11-11-2026 02:50:02
+- **Last Updated**: 11-11-2026 02:54:00
+- **Time Spent**: 4m
+- **Branch**: `main` (user's current branch — log only; the merges landed on `main`)
+- **Commit(s)**: [3baf991](https://github.com/HectorBravo/padel_booking_alrayyana/commit/3baf991) (`docs/ai-explain-taken-slot-retry`), [d994ce0](https://github.com/HectorBravo/padel_booking_alrayyana/commit/d994ce0) (`test/ai-config-override-check`)
+- **Blockers**: none
+- **Findings & Notes**:
+  - Seven local AI branches existed. Five were already fully contained in `main` (`ahead=0 behind=0`) — merged via earlier PRs, so nothing to merge: `feat/ai-booking-max-wait-12h`, `feat/ai-retry-notice-once-per-day`, `fix/ai-deploy-portal-bookable-dates`, `fix/ai-fail-closed-unreadable-picker`, `fix/ai-never-book-unoffered-date`.
+  - Only two carried commits: `docs/ai-explain-taken-slot-retry` (`f81c922`, `taken_forever_check`) and `test/ai-config-override-check` (`e7e15ed`, `config_override_check`). Both added a test to `ai/verify_t9_behaviors.py` at the same insertion point (end of file, before the final summary print), which is why both merges conflicted.
+  - Resolution: keep **both** checks in main's ordering. After `3baf991` the file contains all 13 checks; `d994ce0` was merged with `-X ours` because its content (`config_override_check`) was already present from `3baf991` — the merge only records the branch history.
+  - Verified after each merge: `python ai/verify_t9_behaviors.py` → **ALL PASS** (13 checks, no FAIL).
+  - All seven branches (local + remote) deleted after the merges; `origin/fix/ai-portal-bookable-dates` (T9's branch, merged via PR #7) was pruned too.
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+- None yet.
+
+**Confirmed (user provided):**
+
+- (11-11-2026 02:50:02) "merge all the ai branches into main, update tasklist and delete them after" → merged on `main` directly, then deleted local + remote branches.
+
+### Subtasks / Plan
+
+- [x] Subtask 1 — Inventory AI branches; determine which are ahead of `main`
+- [x] Subtask 2 — Merge `docs/ai-explain-taken-slot-retry` (conflict in `ai/verify_t9_behaviors.py`, resolved keeping both checks)
+- [x] Subtask 3 — Merge `test/ai-config-override-check` (`-X ours`; content already integrated by subtask 2)
+- [x] Subtask 4 — Re-run `ai/verify_t9_behaviors.py` after each merge → ALL PASS (13 checks)
+- [x] Subtask 5 — Delete all seven AI branches locally and on `origin`
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: self-contained recovery notes. Read only if resuming or repeating this chore.
+
+**Repo / remote**: `git@github.com:HectorBravo/padel_booking_alrayyana.git` → https://github.com/HectorBravo/padel_booking_alrayyana (strip `.git`). User's branch: `main`. Working tree clean before starting.
+
+**Branch inventory at start** (`git rev-list --count main..<branch>` / `<branch>..main`):
+
+| Branch | ahead | behind | Action taken |
+|--------|-------|--------|--------------|
+| `docs/ai-explain-taken-slot-retry` | 1 (`f81c922`) | 1 | merged → `3baf991` |
+| `test/ai-config-override-check` | 1 (`e7e15ed`) | 1 | merged → `d994ce0` |
+| `feat/ai-booking-max-wait-12h` | 0 | 0 | already in main; deleted |
+| `feat/ai-retry-notice-once-per-day` | 0 | 0 | already in main; deleted |
+| `fix/ai-deploy-portal-bookable-dates` | 0 | 0 | already in main; deleted |
+| `fix/ai-fail-closed-unreadable-picker` | 0 | 0 | already in main (PR #11); deleted |
+| `fix/ai-never-book-unoffered-date` | 0 | 0 | already in main; deleted |
+
+**The conflict and its exact shape**: both branches appended a check function to the *end* of `ai/verify_t9_behaviors.py`, immediately before:
+
+```python
+print("\n" + ("ALL PASS" if all(results) else "FAILURES PRESENT"))
+sys.exit(0 if all(results) else 1)
+```
+
+`ort` therefore produced a single conflict hunk whose HEAD side held everything main already had (`default_wait_check`, `config_override_check`, `retry_notice_check`, …, `scheduler_retries_until_open_check`) and whose branch side held only the new check. Correct resolution = **keep HEAD's body + insert the branch's check before the final print**, i.e. both checks coexist; there is no semantic choice to make.
+
+**Gotcha hit**: `git checkout --ours <file>` during a conflicted merge restores the *merged/conflicted* blob (with markers), not a clean file — it left `<<<<<<< HEAD` in place and broke parsing. The reliable recovery was `git merge --abort` followed by an explicit strategy (`-X ours`). Do not use `checkout --ours` to "clean" a conflicted file.
+
+**Second gotcha**: `.git/index.lock` appeared transiently mid-sequence (IDE auto-checkpoint commits — see the `cline checkpoint …` refs in `git log --all`). No stale lock needed removing; it cleared by itself, and no git process was running (`Get-Process git*` empty). Retry rather than deleting locks blindly.
+
+**Post-merge state to expect**: `main` tip = the T15 task-log commit on top of `d994ce0`; `ai/verify_t9_behaviors.py` has 13 checks and prints `ALL PASS`; only `main` remains as a local branch, and remote branches are `main` + any non-AI ones.
+
+**Verification command**: `python ai/verify_t9_behaviors.py` (must end in `ALL PASS`; it imports `padel_booking`/`padel_telegram`, so run from the repo root).
 
 ---
 
@@ -831,6 +904,7 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
+| 11-11-2026 02:50:02 | [T15: Merge every AI branch into main and delete them](#task-t15-merge-every-ai-branch-into-main-and-delete-them) | <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span> | 5/5 | 4m |
 | 11-11-2026 01:04:22 | [T13: Treat the picker as the real window limit (7-day assumption is wrong)](#task-t13-treat-the-picker-as-the-real-window-limit-7-day-assumption-is-wrong) | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 14m |
 | 11-11-2026 00:50:01 | [T12: Telegram notice on first retry while a day is unavailable](#task-t12-telegram-notice-on-first-retry-while-a-day-is-unavailable) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 8m |
 | 11-11-2026 00:52:00 | [T11: Default booking_max_wait_minutes to 12h](#task-t11-default-booking_max_wait_minutes-to-12h) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 7m |

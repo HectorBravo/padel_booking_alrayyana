@@ -4,11 +4,11 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 11-11-2026 00:52:00 | [T11: Default booking_max_wait_minutes to 12h](#task-t11-default-booking_max_wait_minutes-to-12h) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 0/5 | 0m | none |
+| 11-11-2026 00:52:00 | [T11: Default booking_max_wait_minutes to 12h](#task-t11-default-booking_max_wait_minutes-to-12h) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 7m | none |
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m | none |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
 
-> ✅ **10 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **11 completed task(s)** — [View completed tasks](#completed-tasks)
 
 ---
 
@@ -256,13 +256,13 @@ None yet.
 
 ## Task T11: Default booking_max_wait_minutes to 12h
 
-- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
 - **Created**: 11-11-2026 00:52:00
-- **Last Updated**: 11-11-2026 00:52:00
-- **Time Spent**: 0m
+- **Last Updated**: 11-11-2026 00:47:00
+- **Time Spent**: 7m
 - **Branch**: [`feat/ai-booking-max-wait-12h`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/feat/ai-booking-max-wait-12h)
-- **Commit(s)**: pending
+- **Commit(s)**: [ed25f08](https://github.com/HectorBravo/padel_booking_alrayyana/commit/ed25f08) (cherry-picked `no_slot` check) + [0ce49ee](https://github.com/HectorBravo/padel_booking_alrayyana/commit/0ce49ee) (the change), merged to `main` via [PR #8](https://github.com/HectorBravo/padel_booking_alrayyana/pull/8) (merge `fbf72a4`)
 - **Blockers**: none
 - **Findings & Notes**:
   - User asked for the default `booking_max_wait_minutes` to become **720 (12h)** instead of 360 (6h).
@@ -283,11 +283,29 @@ None.
 
 ### Subtasks / Plan
 
-- [ ] Add `BOOKING_MAX_WAIT_MINUTES = 720` constant
-- [ ] Replace all four hardcoded `360` fallbacks with the constant
-- [ ] Update `config.sample.json`, `README.md`, `TELEGRAM.md` and docstrings
-- [ ] Verify: `py_compile` + assert the effective default is 720, plus re-run `ai/verify_t9_behaviors.py` (6 checks)
-- [ ] Deploy: PR → merge to `main` → confirm image rebuild; then host `docker compose pull && up -d`
+- [x] Add `BOOKING_MAX_WAIT_MINUTES = 720` constant (`padel_booking.py:830`, next to `BOOKING_WINDOW_DAYS`)
+- [x] Replace all four hardcoded `360` fallbacks with the constant (`:2103` functional bound, `:2222` `cmd_autobook`, `:2429` `book_day` log, `:2628` startup log) — no literal `360` remains
+- [x] Update `config.sample.json`, `README.md` (×2), `TELEGRAM.md` and the `run_booking_race` docstring
+- [x] Verify: `py_compile` clean; `BOOKING_MAX_WAIT_MINUTES == 720`; `ai/verify_t9_behaviors.py` → **ALL PASS** (7 checks, incl. the new 12h default check)
+- [ ] (user) On the production host: `docker compose pull && docker compose up -d` to activate the new image
+
+### Verification results
+
+```
+python -c "import padel_booking as p; print(p.BOOKING_MAX_WAIT_MINUTES)"  -> 720
+python ai/verify_t9_behaviors.py                                          -> ALL PASS (exit 0)
+  [PASS] in-window but NOT OPEN YET -> keeps waiting, never books
+  [PASS] day OPENS after 2 refreshes -> books on the 3rd
+  [PASS] day open, slot taken then free -> books when free
+  [PASS] OUTSIDE the 7-day window -> stops at once, never waits
+  [PASS] bot keyboard offers ONLY portal-opened days
+  [PASS] day open but slots NEVER free -> gives up (outcome=no_slot), books nothing
+  [PASS] default booking_max_wait_minutes is 12h   (timeout=43200s = 12h)
+```
+
+Docker image rebuilt on the merge: run `42898155471` ✓ all steps green.
+
+> **Note**: this branch also carries `ed25f08`, the cherry-pick of the `no_slot` check from `docs/ai-explain-taken-slot-retry` (that branch was still unmerged when this one was cut, so its harness addition had to be brought along). Merging PR #8 therefore closed out that work too.
 
 ### Full Context Notes for AI Agents
 
@@ -582,6 +600,7 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
+| 11-11-2026 00:52:00 | [T11: Default booking_max_wait_minutes to 12h](#task-t11-default-booking_max_wait_minutes-to-12h) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 7m |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m |
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m |
 | 09-11-2026 00:26:36 | [T8: Merge and delete three AI branches](#task-t8-merge-and-delete-three-ai-branches) | <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span> | 7/7 | 5m |

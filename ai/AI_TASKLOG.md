@@ -4,6 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 11-11-2026 00:50:01 | [T12: Telegram notice on first retry while a day is unavailable](#task-t12-telegram-notice-on-first-retry-while-a-day-is-unavailable) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 0/5 | 0m | none |
 | 11-11-2026 00:52:00 | [T11: Default booking_max_wait_minutes to 12h](#task-t11-default-booking_max_wait_minutes-to-12h) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 7m | none |
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m | none |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
@@ -251,6 +252,61 @@ None yet.
 - **Base**: `d5e90ab` (current `main` HEAD). **Branch**: create `fix/ai-portal-session-timeout-90s` from `main`, push, open PR, merge to `main`, confirm the `Build and Push Docker Image` workflow run succeeds.
 - **Production**: `docker` is NOT on this dev machine. After the merge rebuilds `hecbr/padel-booking-alrayyana` on Docker Hub, the production host must run `docker compose pull && docker compose up -d` to activate the new image (entrypoint re-syncs `.py` on start).
 - **Git identity**: override only `GIT_AUTHOR_NAME="AI_bot"` and `GIT_COMMITTER_NAME="AI_bot"`; do NOT set author/committer email (use the user's `git config user.email`). Commit tag format `fix(portal): [ai] ...` / `docs(ai): ...`. Push the task log to the user's current branch (`main`).
+
+---
+
+## Task T12: Telegram notice on first retry while a day is unavailable
+
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
+- **Created**: 11-11-2026 00:50:01
+- **Last Updated**: 11-11-2026 00:50:01
+- **Time Spent**: 0m
+- **Branch**: pending
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - User asked whether the log shows an attempt while a desired day is NOT yet available. It already does, per refresh, at `padel_booking.py:2170` (`...but the portal has not opened this date yet; refreshing in 2 min...` / `...but no preferred slot is free...`). Verified by running the race with output captured, not just by reading code.
+  - The gap is **visibility in Telegram**, not in the log: that line is stdout only, so during a multi-hour wait the chat stays silent (only the startup notice and the final outcome arrive). `_log()`/`print()` also write nothing under `pythonw` (`padel_telegram.py:69`).
+  - **User's chosen behavior**: send to Telegram **once per day on the first retry**, then only the final result. Chosen over "every retry" (would be up to ~360 messages across a 12h wait) and over "no change".
+  - Design: `run_booking_race` gains an optional `on_retry` callback invoked **only when `attempt == 1`** — the race itself has no notion of de-duplication, so the loop keeps it simple and the caller decides the policy. `book_day()` passes a closure that calls `notify_()` exactly once per call; because each trigger (`start` / `prefs change` / `new date offered`) calls `book_day()` afresh, one notice fires per day per trigger, which matches "once per day".
+  - **Backward compatible**: `on_retry=None` default → `cmd_autobook` (CLI) and every existing caller are unchanged; only the scheduler wires up Telegram notifications.
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+None.
+
+**Confirmed (user provided):**
+
+- (11-11-2026 ~00:50) "do you indicate on the log when the new day is not available but you are trying to book?" → yes, already logged every refresh; the missing part was Telegram visibility.
+- (11-11-2026 ~00:50) Chose: "Also send to Telegram once per day (first retry), then a final result."
+
+### Subtasks / Plan
+
+- [ ] Add `on_retry` parameter to `run_booking_race` and fire it only on the first refresh
+- [ ] Wire `book_day()` to notify via `notify_()` exactly once per attempt
+- [ ] Extend `ai/verify_t9_behaviors.py`: exactly one notice while waiting, none after booking immediately, none for outside-window days
+- [ ] Verify: `py_compile` + full harness green; deploy PR → merge → image rebuild
+- [ ] (user) On the production host: `docker compose pull && docker compose up -d`
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: Self-contained knowledge base to resume T12 without other context.
+
+- **Base**: `main` at `bda1b65` (T9/T10/T11 all merged; PRs #7 and #8).
+- **Anchors** (`padel_booking.py`):
+  - `run_booking_race:2053-2057` — signature to extend with `on_retry=None`.
+  - `run_booking_race:2162-2181` — the wait branch; `attempt` counter incremented at the top of the loop (`attempt += 1`), so "first retry" is `attempt == 1`. The existing stdout line is at `:2170`; fire `on_retry(reason)` right after it, before `on_wait()`/`sleep`.
+  - `run_autobook_loop.book_day:2409-2412` — the call site to pass `on_retry=` through; `notify_` is defined at `:2323` in the enclosing scope.
+  - Final-result notices already exist and must NOT be duplicated: `not_yet_open` `:2425-2433`, `outside_window` `:2418-2424`, no-slot `:2511-2517`, booked `:2451-2460`.
+  - CLI `cmd_autobook:2223` calls the race without `on_retry` — leave as is.
+- **Callback contract**: called with one arg, the human-readable reason string already computed for the log (`"the portal has not opened this date yet"` / `"no preferred slot is free"`). Must never break the booking loop: wrap the call in try/except like `on_wait` does.
+- **Why not de-dupe inside the race**: the race is a bounded single attempt; de-dup state across attempts belongs to the caller. A closure counter inside `book_day` is per-attempt and resets naturally on the next trigger, which is the requested "once per day" semantics.
+- **Harness**: `ai/verify_t9_behaviors.py` patches `portal_bookable_dates`, `get_available_slots`, `submit_booking_fast`, `time.sleep`; add checks that count `on_retry` invocations. Must stay green for all pre-existing checks.
+- **Deploy**: PR → merge to `main` → watch `Build and Push Docker Image` → user runs `docker compose pull && docker compose up -d` (no `docker` on this dev machine).
+- **Git identity**: only `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` = `AI_bot`; never set email; `[ai]` tag after the colon; task log committed to the user's current branch (`main`).
 
 ---
 

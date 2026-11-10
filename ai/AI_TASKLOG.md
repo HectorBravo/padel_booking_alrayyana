@@ -4,13 +4,13 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 11-11-2026 01:04:22 | [T13: Treat the picker as the real window limit (7-day assumption is wrong)](#task-t13-treat-the-picker-as-the-real-window-limit-7-day-assumption-is-wrong) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 0/6 | 0m | none |
+| 11-11-2026 01:04:22 | [T13: Treat the picker as the real window limit (7-day assumption is wrong)](#task-t13-treat-the-picker-as-the-real-window-limit-7-day-assumption-is-wrong) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 14m | none |
 | 11-11-2026 00:50:01 | [T12: Telegram notice on first retry while a day is unavailable](#task-t12-telegram-notice-on-first-retry-while-a-day-is-unavailable) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 8m | none |
 | 11-11-2026 00:52:00 | [T11: Default booking_max_wait_minutes to 12h](#task-t11-default-booking_max_wait_minutes-to-12h) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 7m | none |
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m | none |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
 
-> ✅ **12 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **13 completed task(s)** — [View completed tasks](#completed-tasks)
 
 ---
 
@@ -258,13 +258,13 @@ None yet.
 
 ## Task T13: Treat the picker as the real window limit (7-day assumption is wrong)
 
-- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span>
 - **Created**: 11-11-2026 01:04:22
-- **Last Updated**: 11-11-2026 01:04:22
-- **Time Spent**: 0m
-- **Branch**: pending
-- **Commit(s)**: pending
+- **Last Updated**: 11-11-2026 01:11:30
+- **Time Spent**: 14m
+- **Branch**: [`fix/ai-never-book-unoffered-date`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-never-book-unoffered-date)
+- **Commit(s)**: [42cf189](https://github.com/HectorBravo/padel_booking_alrayyana/commit/42cf189), merged to `main` via [PR #10](https://github.com/HectorBravo/padel_booking_alrayyana/pull/10) (merge `677f3f9`)
 - **Blockers**: none
 - **Findings & Notes**:
   - **User evidence (production, 11-11-2026 00:56:46)**: `*** Booking Tue 17 Nov 2026 ... *** FAILED to book 19:00-20:00 [...]: booking not confirmed (slots still available, HTTP 303) [race: 0.40s]`.
@@ -288,12 +288,29 @@ None.
 
 ### Subtasks / Plan
 
-- [ ] Make the effective hard limit = picker's last offered date when readable (`window_limit` / a new helper), keeping `booking_window_days` only as the unreadable-picker fallback
-- [ ] `run_booking_race`: return `outside_window` for dates beyond that effective limit (never POST them)
-- [ ] Ignore `<option disabled>` in `parse_booking_dates`
-- [ ] Keep "wait until open" correct for dates **inside** the picker's range whose slots are not free yet
-- [ ] Regression test: picker = 10..16 Nov, target 17 Nov → must NOT submit (and disabled options excluded)
-- [ ] Verify: `py_compile`, full harness, PR → merge → image rebuild; then host `docker compose pull && up -d`
+- [x] `effective_bookable_last(cfg, now, offered=None)` (`padel_booking.py:869`) — picker's last option is the ceiling; arithmetic bound only when the picker is unreadable
+- [x] `run_booking_race` hard-limit check now uses that ceiling (`:2184-2188`) → an unopened far date returns `outside_window` and is **never POSTed**; `offered` is read once per refresh (no extra request)
+- [x] Ignore `<option disabled>` in `parse_booking_dates.collect` (`:750-756`)
+- [x] Wait-until-open preserved for dates the picker's ceiling already reaches; `book_day` now reports "not offered by the picker yet … will be re-tried" instead of a false "can never be booked" (`:2484-2503`)
+- [x] Regression tests: production reproduction (picker ..today+5, target today+6 → 0 POSTs) + disabled-option exclusion
+- [ ] (user) On the production host: `docker compose pull && docker compose up -d`
+
+### Verification results
+
+```
+python ai/verify_t9_behaviors.py -> ALL PASS (exit 0, 11 checks)
+  [PASS] date beyond the picker's last option is never POSTed (the production 303 bug)
+          target=today+6, picker ends today+5 -> posts=0 (outcome=outside_window);
+          target=today+5 (offered) -> posts=1 (outcome=slot_found)
+  [PASS] <option disabled> is not treated as bookable
+  ... plus the 9 pre-existing checks (wait-until-open, retry notice, 12h default, …)
+```
+
+**Tests corrected, not just added**: three existing scenarios encoded the bug itself — they waited for `today+6` while the picker stopped at `today+4`, which under correct semantics is "beyond the ceiling", not "not open yet". They now target a date inside the picker's reach (`NEAR = today+3`) and assert the right outcomes.
+
+Docker image rebuilt on the merge: run `42902188276` ✓ success.
+
+**Trigger (3) still guarantees the retry**: `last_window` records the dates seen (10–16 Nov); when 17 Nov appears in the picker it is absent from that set, so the loop books it then — verified by reading `fresh = [d for d in candidates if d not in last_window]`.
 
 ### Full Context Notes for AI Agents
 
@@ -728,6 +745,7 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
+| 11-11-2026 01:04:22 | [T13: Treat the picker as the real window limit (7-day assumption is wrong)](#task-t13-treat-the-picker-as-the-real-window-limit-7-day-assumption-is-wrong) | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 14m |
 | 11-11-2026 00:50:01 | [T12: Telegram notice on first retry while a day is unavailable](#task-t12-telegram-notice-on-first-retry-while-a-day-is-unavailable) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 8m |
 | 11-11-2026 00:52:00 | [T11: Default booking_max_wait_minutes to 12h](#task-t11-default-booking_max_wait_minutes-to-12h) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 7m |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m |

@@ -144,5 +144,35 @@ def keyboard_check():
 
 results.append(keyboard_check())
 
+# --- What happens when the day is open but its slots stay taken? ----------
+def taken_forever_check():
+    """Day offered, no preferred slot EVER free: does it keep hammering, or
+    give up and leave the decision to the scheduler?"""
+    calls = {"book": 0, "sleep": 0}
+
+    def fake_slots(s, cfg, api_date, meta):
+        return []                      # never a free preferred slot
+
+    with patch.object(pb, "get_booking_meta", lambda cfg: (object(), {})), \
+         patch.object(pb, "portal_bookable_dates", lambda cfg, force=False: [TARGET]), \
+         patch.object(pb, "get_available_slots", fake_slots), \
+         patch.object(pb, "submit_booking_fast",
+                      lambda *a, **k: calls.__setitem__("book", calls["book"] + 1)), \
+         patch.object(pb.time, "sleep",
+                      lambda sec: calls.__setitem__("sleep", calls["sleep"] + sec)):
+        best, slots, status, outcome = pb.run_booking_race(
+            CFG, datetime.combine(TARGET, datetime.min.time()), PREFERRED,
+            wait_for_open=False, max_attempts=5)
+
+    ok = (best is None and outcome == "no_slot" and calls["book"] == 0)
+    print(f"[{'PASS' if ok else 'FAIL'}] day open but slots NEVER free -> gives up "
+          f"(outcome=no_slot), books nothing")
+    print(f"        best={best} outcome={outcome} booking_attempts={calls['book']} "
+          f"slept={calls['sleep']}s over 5 refreshes")
+    return ok
+
+
+results.append(taken_forever_check())
+
 print("\n" + ("ALL PASS" if all(results) else "FAILURES PRESENT"))
 sys.exit(0 if all(results) else 1)

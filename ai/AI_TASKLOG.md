@@ -4,12 +4,12 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 11-11-2026 00:50:01 | [T12: Telegram notice on first retry while a day is unavailable](#task-t12-telegram-notice-on-first-retry-while-a-day-is-unavailable) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 0/5 | 0m | none |
+| 11-11-2026 00:50:01 | [T12: Telegram notice on first retry while a day is unavailable](#task-t12-telegram-notice-on-first-retry-while-a-day-is-unavailable) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 8m | none |
 | 11-11-2026 00:52:00 | [T11: Default booking_max_wait_minutes to 12h](#task-t11-default-booking_max_wait_minutes-to-12h) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 7m | none |
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m | none |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
 
-> ✅ **11 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **12 completed task(s)** — [View completed tasks](#completed-tasks)
 
 ---
 
@@ -257,13 +257,13 @@ None yet.
 
 ## Task T12: Telegram notice on first retry while a day is unavailable
 
-- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
 - **Created**: 11-11-2026 00:50:01
-- **Last Updated**: 11-11-2026 00:50:01
-- **Time Spent**: 0m
-- **Branch**: pending
-- **Commit(s)**: pending
+- **Last Updated**: 11-11-2026 00:54:30
+- **Time Spent**: 8m
+- **Branch**: [`feat/ai-retry-notice-once-per-day`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/feat/ai-retry-notice-once-per-day)
+- **Commit(s)**: [6bd3b40](https://github.com/HectorBravo/padel_booking_alrayyana/commit/6bd3b40) (cherry-picked config-override check) + [0780f09](https://github.com/HectorBravo/padel_booking_alrayyana/commit/0780f09) (the change), merged to `main` via [PR #9](https://github.com/HectorBravo/padel_booking_alrayyana/pull/9) (merge `cd1a98a`)
 - **Blockers**: none
 - **Findings & Notes**:
   - User asked whether the log shows an attempt while a desired day is NOT yet available. It already does, per refresh, at `padel_booking.py:2170` (`...but the portal has not opened this date yet; refreshing in 2 min...` / `...but no preferred slot is free...`). Verified by running the race with output captured, not just by reading code.
@@ -285,11 +285,28 @@ None.
 
 ### Subtasks / Plan
 
-- [ ] Add `on_retry` parameter to `run_booking_race` and fire it only on the first refresh
-- [ ] Wire `book_day()` to notify via `notify_()` exactly once per attempt
-- [ ] Extend `ai/verify_t9_behaviors.py`: exactly one notice while waiting, none after booking immediately, none for outside-window days
-- [ ] Verify: `py_compile` + full harness green; deploy PR → merge → image rebuild
+- [x] Add `on_retry` parameter to `run_booking_race` (`padel_booking.py:2057`) and fire it only on the first refresh (`:2178`, `attempt == 1`), wrapped in try/except so a failing callback can never abort the wait
+- [x] Wire `book_day()` to notify via `notify_()` exactly once per attempt (`:2424-2427`, passed at `:2435`)
+- [x] Extend `ai/verify_t9_behaviors.py`: one notice while waiting, none on an immediate booking, none for outside-window days
+- [x] Verify: `py_compile` clean; harness **ALL PASS** (9 checks); merged via PR #9 → image rebuilt (run `42899683557` ✓ success)
 - [ ] (user) On the production host: `docker compose pull && docker compose up -d`
+
+### Verification results
+
+```
+python ai/verify_t9_behaviors.py -> ALL PASS (exit 0)
+  ...
+  [PASS] exactly ONE retry notice per attempt, none when it books or refuses at once
+          waited 6 refreshes -> notices=1 (outcome=not_yet_open); immediate book
+          -> notices=0 (outcome=slot_found); outside window -> notices=0
+          (outcome=outside_window)
+```
+
+Message the user now receives once per day per attempt:
+
+`⏳ Trying to book Tue 17 Nov: the portal has not opened this date yet. Refreshing every 2 min — I will report the result here.`
+
+> **Note**: `6bd3b40` is the cherry-pick of the config-override check from `test/ai-config-override-check`, which was still unmerged when this branch was cut; PR #9 therefore landed that test too.
 
 ### Full Context Notes for AI Agents
 
@@ -656,6 +673,7 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
+| 11-11-2026 00:50:01 | [T12: Telegram notice on first retry while a day is unavailable](#task-t12-telegram-notice-on-first-retry-while-a-day-is-unavailable) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 8m |
 | 11-11-2026 00:52:00 | [T11: Default booking_max_wait_minutes to 12h](#task-t11-default-booking_max_wait_minutes-to-12h) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 7m |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m |
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m |

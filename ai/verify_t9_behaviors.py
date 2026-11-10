@@ -1,0 +1,148 @@
+"""Synthetic check of the two behaviors the user asked to verify.
+
+No portal access: every network entry point is patched. Run with:
+    python ai/verify_t9_behaviors.py
+"""
+import sys
+from datetime import date, datetime, timedelta
+from unittest.mock import patch
+
+sys.path.insert(0, ".")
+import padel_booking as pb  # noqa: E402
+
+TODAY = datetime.now().date()
+TARGET = TODAY + timedelta(days=6)          # far end of the rolling window
+PREFERRED = ["18:00-19:00"]
+SLOT = {"label": "18:00-19:00", "value": "18", "start": "18:00"}
+CFG = {"slot_retry_minutes": 2, "booking_max_wait_minutes": 360}
+
+
+def scenario(name, offered_seq, slots_seq, expect_outcome, expect_booked,
+             max_attempts=8, target=None):
+    """offered_seq/slots_seq: values returned by successive refreshes."""
+    target = target or TARGET
+    calls = {"book": 0, "sleep": 0, "keepalive": 0}
+
+    def fake_meta(cfg):
+        return object(), {"id": 370}
+
+    def fake_slots(s, cfg, api_date, meta):
+        i = min(len(slots_seen := getattr(fake_slots, "seen", [])),
+                len(slots_seq) - 1)
+        fake_slots.seen.append(i)
+        return slots_seq[i]
+
+    def fake_submit(s, cfg, meta, d, slot, desc):
+        calls["book"] += 1
+        return "200"
+
+    def fake_sleep(secs):
+        calls["sleep"] += secs
+
+    fake_slots.seen = []
+
+    def cycled(seq):
+        """Return a fn(i) giving seq[min(i, len-1)] — repeats the last value."""
+        def get(i):
+            return seq[min(i, len(seq) - 1)]
+        return get
+
+    offered_at = cycled(offered_seq)
+    slots_at = cycled(slots_seq)
+    state = {"n": 0}
+
+    def fake_offered(cfg, force=False):
+        state["n"] += 1
+        return offered_at(state["n"] - 1)
+
+    def fake_slots(s, cfg, api_date, meta):
+        return slots_at(state["n"] - 1)
+
+    with patch.object(pb, "get_booking_meta", fake_meta), \
+         patch.object(pb, "portal_bookable_dates", fake_offered), \
+         patch.object(pb, "get_available_slots", fake_slots), \
+         patch.object(pb, "pick_best_slot", lambda slots, pref: SLOT if slots else None), \
+         patch.object(pb, "submit_booking_fast", fake_submit), \
+         patch.object(pb.time, "sleep", fake_sleep):
+        best, _slots, status, outcome = pb.run_booking_race(
+            CFG, datetime.combine(target, datetime.min.time()), PREFERRED,
+            wait_for_open=False, max_attempts=max_attempts,
+            on_wait=lambda: calls.__setitem__(
+                "keepalive", calls["keepalive"] + 1))
+
+    ok = (outcome == expect_outcome and calls["book"] == expect_booked)
+    print(f"[{'PASS' if ok else 'FAIL'}] {name}\n"
+          f"        outcome={outcome} booking_attempts={calls['book']} "
+          f"slept={calls['sleep']}s keepalive={calls['keepalive']}")
+    return ok
+
+
+results = []
+
+# 1. Day not opened by the portal at all: must NOT book, must keep refreshing
+#    every 2 min (120s) and keep the session alive between waits.
+results.append(scenario(
+    "in-window but NOT OPEN YET -> keeps waiting, never books",
+    offered_seq=[[TODAY + timedelta(days=i) for i in range(5)]] * 6,
+    slots_seq=[[]],
+    expect_outcome="not_yet_open", expect_booked=0))
+
+# 2. Portal opens the day on the third refresh -> books immediately after.
+results.append(scenario(
+    "day OPENS after 2 refreshes -> books on the 3rd",
+    offered_seq=[[TODAY + timedelta(days=i) for i in range(5)],
+                 [TODAY + timedelta(days=i) for i in range(5)],
+                 [TARGET]],
+    slots_seq=[[], [], [SLOT]],
+    expect_outcome="slot_found", expect_booked=1))
+
+# 3. Day offered but slots not free yet -> keeps refreshing, books when free.
+results.append(scenario(
+    "day open, slot taken then free -> books when free",
+    offered_seq=[[TARGET]] * 4,
+    slots_seq=[[], [], [SLOT]],
+    expect_outcome="slot_found", expect_booked=1))
+
+# 4. Beyond the rolling window -> stop immediately, no waiting.
+FAR = TODAY + timedelta(days=9)              # today+6 is the last bookable day
+results.append(scenario(
+    "OUTSIDE the 7-day window -> stops at once, never waits",
+    offered_seq=[[TODAY]],
+    slots_seq=[[]],
+    expect_outcome="outside_window", expect_booked=0, target=FAR))
+
+# --- Bot date keyboard: must offer ONLY the days the portal opened ---------
+class _FakeBot:
+    """Minimal stand-in capturing what _show_date_keyboard would render."""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.sent = []
+
+    def _send(self, chat_id, text, keyboard=None):
+        self.sent.append((text, keyboard))
+
+
+import padel_telegram as pt  # noqa: E402
+
+PORTAL_OPENED = [TODAY + timedelta(days=i) for i in range(4)]  # today..+3
+
+
+def keyboard_check():
+    with patch.object(pt, "portal_bookable_dates", lambda cfg, force=False: PORTAL_OPENED):
+        bot = _FakeBot(CFG)
+        pt.PadelBot._show_date_keyboard(bot, 1, "Pick a date:")
+    text, kb = bot.sent[0]
+    buttons = [b["text"] for row in kb["inline_keyboard"] for b in row]
+    expected = [f"{d:%a %d %b}" for d in PORTAL_OPENED]
+    ok = buttons == expected
+    print(f"[{'PASS' if ok else 'FAIL'}] bot keyboard offers ONLY portal-opened days")
+    print(f"        buttons={buttons} (expected {expected}; "
+          f"portal opened {len(PORTAL_OPENED)} of 7 window days)")
+    return ok
+
+
+results.append(keyboard_check())
+
+print("\n" + ("ALL PASS" if all(results) else "FAILURES PRESENT"))
+sys.exit(0 if all(results) else 1)

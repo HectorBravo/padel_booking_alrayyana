@@ -193,5 +193,33 @@ def default_wait_check():
 
 results.append(default_wait_check())
 
+# --- Config key wins over the constant; constant is only the fallback ------
+def config_override_check():
+    """The lowercase config key and the UPPER_CASE constant are not two
+    settings: the constant is only what cfg.get() falls back to when the key is
+    absent. An explicit value must always win."""
+    def bound(cfg):
+        retry_secs = max(1, int(cfg.get("slot_retry_minutes", 2))) * 60
+        return max(retry_secs, int(cfg.get(
+            "booking_max_wait_minutes", pb.BOOKING_MAX_WAIT_MINUTES)) * 60)
+
+    cases = [
+        ({}, 720 * 60, "key absent -> constant 720"),
+        ({"booking_max_wait_minutes": 30}, 30 * 60, "explicit 30 wins"),
+        ({"booking_max_wait_minutes": 1440}, 1440 * 60, "explicit 1440 wins"),
+    ]
+    ok = True
+    for cfg, want, why in cases:
+        got = bound(cfg)
+        good = got == want
+        ok = ok and good
+        print(f"    {'ok' if good else 'BAD'} {why}: {got}s")
+    print(f"[{'PASS' if ok else 'FAIL'}] config key overrides the constant; "
+          f"constant is fallback only")
+    return ok
+
+
+results.append(config_override_check())
+
 print("\n" + ("ALL PASS" if all(results) else "FAILURES PRESENT"))
 sys.exit(0 if all(results) else 1)

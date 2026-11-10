@@ -12,6 +12,11 @@ import padel_booking as pb  # noqa: E402
 
 TODAY = datetime.now().date()
 TARGET = TODAY + timedelta(days=6)          # far end of the rolling window
+# A date the picker can plausibly not have opened YET but will reach soon: it
+# must sit inside the picker's own ceiling. Waiting for a date beyond that
+# ceiling is pointless (the portal will not accept it until the window slides),
+# which is exactly the bug fixed on 11-11-2026 — see picker_ceiling_check().
+NEAR = TODAY + timedelta(days=3)
 PREFERRED = ["18:00-19:00"]
 SLOT = {"label": "18:00-19:00", "value": "18", "start": "18:00"}
 CFG = {"slot_retry_minutes": 2, "booking_max_wait_minutes": 360}
@@ -79,22 +84,26 @@ def scenario(name, offered_seq, slots_seq, expect_outcome, expect_booked,
 
 results = []
 
-# 1. Day not opened by the portal at all: must NOT book, must keep refreshing
-#    every 2 min (120s) and keep the session alive between waits.
+# 1. Day the picker has reached but whose slots are not open yet: must NOT
+#    book, must keep refreshing every 2 min (120s) and keep the session alive
+#    between waits. (An unlisted day *beyond* the picker's ceiling is a
+#    different case entirely -> outside_window; see picker_ceiling_check.)
 results.append(scenario(
-    "in-window but NOT OPEN YET -> keeps waiting, never books",
+    "day reachable but slots not open -> keeps waiting, never books",
     offered_seq=[[TODAY + timedelta(days=i) for i in range(5)]] * 6,
     slots_seq=[[]],
-    expect_outcome="not_yet_open", expect_booked=0))
+    expect_outcome="no_slot", expect_booked=0, target=NEAR))
 
-# 2. Portal opens the day on the third refresh -> books immediately after.
+# 2. Picker has reached the target's date but does not list it on the first
+#    read (and its slots are not free yet), then lists it with a free slot:
+#    the race must wait, then book. The ceiling stays at/above the target so
+#    "not listed" means "wait", not "beyond the ceiling".
 results.append(scenario(
-    "day OPENS after 2 refreshes -> books on the 3rd",
-    offered_seq=[[TODAY + timedelta(days=i) for i in range(5)],
-                 [TODAY + timedelta(days=i) for i in range(5)],
-                 [TARGET]],
-    slots_seq=[[], [], [SLOT]],
-    expect_outcome="slot_found", expect_booked=1))
+    "day reachable, opens on the 2nd read -> books then",
+    offered_seq=[[TODAY, TODAY + timedelta(days=1), TODAY + timedelta(days=4)],
+                 [NEAR]],
+    slots_seq=[[], [SLOT]],
+    expect_outcome="slot_found", expect_booked=1, target=NEAR))
 
 # 3. Day offered but slots not free yet -> keeps refreshing, books when free.
 results.append(scenario(
@@ -252,13 +261,13 @@ def retry_notice_check():
                 on_retry=notices.append)[3]
         return notices, outcome
 
-    not_open = [TODAY + timedelta(days=i) for i in range(5)]   # never TARGET
+    not_open = [TODAY + timedelta(days=i) for i in range(5)]   # never NEAR
 
-    a, oa = run([not_open], [[]])                              # waits each time
-    b, ob = run([[TARGET]], [[SLOT]])                          # books at once
+    a, oa = run([not_open], [[]], target=NEAR)                 # waits each time
+    b, ob = run([[NEAR]], [[SLOT]], target=NEAR)               # books at once
     c, oc = run([[TODAY]], [[]], target=TODAY + timedelta(days=9))  # too far
 
-    ok = (len(a) == 1 and oa == "not_yet_open"
+    ok = (len(a) == 1 and oa in ("no_slot", "not_yet_open")
           and len(b) == 0 and ob == "slot_found"
           and len(c) == 0 and oc == "outside_window")
     print(f"[{'PASS' if ok else 'FAIL'}] exactly ONE retry notice per attempt, "
@@ -270,6 +279,78 @@ def retry_notice_check():
 
 
 results.append(retry_notice_check())
+
+# --- Production regression: picker stops at today+5, bot must NOT POST ------
+def picker_ceiling_check():
+    """Reproduces the 11-11-2026 production failure.
+
+    Today is Wed 11 Nov; the 'Check in date' picker offers only ..16 Nov, so
+    Tue 17 Nov has no option and cannot be booked. The old code treated
+    today+6 as the hard limit, saw 17 Nov as merely 'not open yet', asked the
+    slot endpoint (which answers for closed dates), found a free slot and POSTed
+    it -> HTTP 303 'booking not confirmed'.
+    """
+    today = datetime.now().date()
+    picker = [today + timedelta(days=i) for i in range(0, 6)]   # .. today+5
+    beyond = today + timedelta(days=6)                          # == today+6
+
+    def attempt(offered_seq, slots_seq, target):
+        state = {"n": 0}
+        posts = []
+
+        def offered(cfg, force=False):
+            state["n"] += 1
+            i = min(state["n"] - 1, len(offered_seq) - 1)
+            return offered_seq[i]
+
+        def slots(s, cfg, api_date, meta):
+            i = min(state["n"] - 1, len(slots_seq) - 1)
+            return slots_seq[i]
+
+        with patch.object(pb, "get_booking_meta", lambda cfg: (object(), {})), \
+             patch.object(pb, "portal_bookable_dates", offered), \
+             patch.object(pb, "get_available_slots", slots), \
+             patch.object(pb, "pick_best_slot",
+                          lambda sl, pr: SLOT if sl else None), \
+             patch.object(pb, "submit_booking_fast",
+                          lambda *a, **k: posts.append(a) or "303"), \
+             patch.object(pb.time, "sleep", lambda sec: None):
+            outcome = pb.run_booking_race(
+                CFG, datetime.combine(target, datetime.min.time()), PREFERRED,
+                wait_for_open=False, max_attempts=2)[3]
+        return posts, outcome
+
+    # 17 Nov is beyond the picker's ceiling even though slots look free.
+    posts_a, out_a = attempt([picker], [[SLOT]], beyond)
+    # A date the picker DOES offer must still book normally.
+    posts_b, out_b = attempt([picker], [[SLOT]], picker[-1])
+
+    ok = (len(posts_a) == 0 and out_a == "outside_window"
+          and len(posts_b) == 1 and out_b == "slot_found")
+    print(f"[{'PASS' if ok else 'FAIL'}] date beyond the picker's last option is "
+          f"never POSTed (the production 303 bug)")
+    print(f"        target=today+6, picker ends today+5 -> posts={len(posts_a)} "
+          f"(outcome={out_a}); target=today+5 (offered) -> posts={len(posts_b)} "
+          f"(outcome={out_b})")
+    return ok
+
+
+def disabled_option_check():
+    """A greyed-out <option> is the portal refusing a date; it must not count."""
+    html = ('<select name="check_in_date">'
+            '<option value="Nov 15, 2026">Nov 15, 2026</option>'
+            '<option value="Nov 17, 2026" disabled>Nov 17, 2026</option>'
+            "</select>")
+    dates = pb.parse_booking_dates(html)
+    ok = len(dates) == 1 and dates[0].day == 15
+    print(f"[{'PASS' if ok else 'FAIL'}] <option disabled> is not treated as "
+          f"bookable")
+    print(f"        parsed -> {dates}")
+    return ok
+
+
+results.append(picker_ceiling_check())
+results.append(disabled_option_check())
 
 print("\n" + ("ALL PASS" if all(results) else "FAILURES PRESENT"))
 sys.exit(0 if all(results) else 1)

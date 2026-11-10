@@ -2054,7 +2054,7 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
                      wait_for_open: bool = True, timeout: int | None = None,
                      max_attempts: int | None = None, dry_run: bool = False,
                      retry_minutes: int | None = None, stop=None,
-                     on_wait=None):
+                     on_wait=None, on_retry=None):
     """Poll the portal and book the best preferred slot when one is bookable.
 
     Two facts are read on every refresh and must NOT be conflated:
@@ -2092,7 +2092,12 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
     ``threading.Event`` checked before every refresh, so a long wait cannot
     delay ``/stopautobook`` (outcome ``"stopped"``). ``on_wait`` is an optional
     no-arg callback run before every refresh — the autobooking loop uses it to
-    keep the session alive during waits that can span hours.
+    keep the session alive during waits that can span hours. ``on_retry`` is an
+    optional callback taking the wait reason (one string); it fires **only on
+    the first refresh** of an attempt, i.e. once the race has decided to wait
+    rather than book now. The race never repeats it, so a caller can use it for
+    one "I am trying, but this day is not available yet" notice without having
+    to de-duplicate hours of identical messages itself.
     """
     open_hour = int(cfg.get("booking_open_hour", 0))
     if retry_minutes is None:
@@ -2170,6 +2175,15 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
         print(f"{ts_prefix()} [bot] {target:%a %d %b} is inside the portal's "
               f"{window_label([first, last])} window but {reason}; "
               f"refreshing in {retry_secs // 60} min...", flush=True)
+        if on_retry is not None and attempt == 1:
+            # One notice per attempt (the caller decides what to do with it,
+            # e.g. a single Telegram heads-up); a failing callback must never
+            # abort the wait.
+            try:
+                on_retry(reason)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                print(f"{ts_prefix()} [bot] retry notice failed (non-fatal): "
+                      f"{e}", flush=True)
         if on_wait is not None:
             # Long waits must not starve the session: refresh it before sleeping
             # so a hours-long wait cannot end with an expired session.
@@ -2404,12 +2418,21 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
         log(f"*** Booking {target:%a %d %b %Y} "
             f"(prefs: {', '.join(preferred)}) "
             f"{'[DRY RUN]' if dry_run else ''}...")
+        # One Telegram heads-up per day per attempt: the race reports only its
+        # first wait, so a 12h wait cannot flood the chat. The final result
+        # (booked / no slot / not opened yet) is reported separately below.
+        def on_retry(reason: str) -> None:
+            notify_(f"⏳ Trying to book {target:%a %d %b}: {reason}. "
+                    f"Refreshing every {int(cfg.get('slot_retry_minutes', 2))} "
+                    f"min — I will report the result here.")
+
         t0 = time.time()
         try:
             best, slots, r, outcome = run_booking_race(
                 cfg, datetime.combine(target, datetime.min.time()),
                 preferred, wait_for_open=False, dry_run=dry_run,
-                stop=stop_event, on_wait=lambda: keepalive(cfg))
+                stop=stop_event, on_wait=lambda: keepalive(cfg),
+                on_retry=on_retry)
             t_race = time.time() - t0
             # Two honest reasons for having booked nothing: outside the rolling
             # window the day can never be booked now (stop, never wait), while

@@ -4,7 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 11-11-2026 01:14:00 | [T14: Stop POSTing unopened dates (fail-closed) and keep retrying them](#task-t14-stop-posting-unopened-dates-fail-closed-and-keep-retrying-them) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 9m | none |
+| 11-11-2026 01:14:00 | [T14: Stop POSTing unopened dates (fail-closed) and keep retrying them](#task-t14-stop-posting-unopened-dates-fail-closed-and-keep-retrying-them) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 6/6 | 11m | none |
 | 11-11-2026 01:04:22 | [T13: Treat the picker as the real window limit (7-day assumption is wrong)](#task-t13-treat-the-picker-as-the-real-window-limit-7-day-assumption-is-wrong) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 14m | none |
 | 11-11-2026 00:50:01 | [T12: Telegram notice on first retry while a day is unavailable](#task-t12-telegram-notice-on-first-retry-while-a-day-is-unavailable) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 8m | none |
 | 11-11-2026 00:52:00 | [T11: Default booking_max_wait_minutes to 12h](#task-t11-default-booking_max_wait_minutes-to-12h) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 7m | none |
@@ -20,10 +20,10 @@
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span>
 - **Created**: 11-11-2026 01:14:00
-- **Last Updated**: 11-11-2026 01:23:00
-- **Time Spent**: 9m
+- **Last Updated**: 11-11-2026 01:26:00
+- **Time Spent**: 11m
 - **Branch**: [`fix/ai-fail-closed-unreadable-picker`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-fail-closed-unreadable-picker)
-- **Commit(s)**: pending
+- **Commit(s)**: [9ad4b0c](https://github.com/HectorBravo/padel_booking_alrayyana/commit/9ad4b0c1474830c813e6f7b9c81898201cc87dbf) (merge [bf1baa7](https://github.com/HectorBravo/padel_booking_alrayyana/commit/bf1baa7656f024da16d9832aff06d59a0f368f56), PR #11)
 - **Blockers**: none
 - **Findings & Notes**:
   - User's 4th report of the same symptom: `*** FAILED to book 19:00-20:00 ... booking not confirmed (slots still available, HTTP 303)` for Tue 17 Nov while the "Check in date" dropdown did not offer it.
@@ -50,7 +50,7 @@
 - [x] Keep waiting behaviour for unopened future dates (`not_yet_open`, not `outside_window`)
 - [x] Fix scheduler trigger (3) so unlisted desired days are re-attempted on a cadence
 - [x] Add regression tests (empty picker never posts but keeps waiting; opens later → books; scheduler retries → books)
-- [ ] Record the real commit hash after push
+- [x] Record the real commit hash after push
 
 ### Full Context Notes for AI Agents
 

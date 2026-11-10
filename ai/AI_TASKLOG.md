@@ -4,13 +4,99 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 11-11-2026 01:14:00 | [T14: Stop POSTing unopened dates (fail-closed) and keep retrying them](#task-t14-stop-posting-unopened-dates-fail-closed-and-keep-retrying-them) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 9m | none |
 | 11-11-2026 01:04:22 | [T13: Treat the picker as the real window limit (7-day assumption is wrong)](#task-t13-treat-the-picker-as-the-real-window-limit-7-day-assumption-is-wrong) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 14m | none |
 | 11-11-2026 00:50:01 | [T12: Telegram notice on first retry while a day is unavailable](#task-t12-telegram-notice-on-first-retry-while-a-day-is-unavailable) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 8m | none |
 | 11-11-2026 00:52:00 | [T11: Default booking_max_wait_minutes to 12h](#task-t11-default-booking_max_wait_minutes-to-12h) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 7m | none |
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m | none |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
 
-> ✅ **13 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **14 completed task(s)** — [View completed tasks](#completed-tasks)
+
+---
+
+## Task T14: Stop POSTing unopened dates (fail-closed) and keep retrying them
+
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
+- **Type**: <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span>
+- **Created**: 11-11-2026 01:14:00
+- **Last Updated**: 11-11-2026 01:23:00
+- **Time Spent**: 9m
+- **Branch**: [`fix/ai-fail-closed-unreadable-picker`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-fail-closed-unreadable-picker)
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - User's 4th report of the same symptom: `*** FAILED to book 19:00-20:00 ... booking not confirmed (slots still available, HTTP 303)` for Tue 17 Nov while the "Check in date" dropdown did not offer it.
+  - **T13's diagnosis was incomplete.** T13 made the picker's last option the ceiling but kept a fallback: an *empty/unreadable* picker fell back to the arithmetic bound, and `opened = not offered or target in offered` treated "unreadable" as bookable. That path still POSTs.
+  - Proof by differential test (temp script, since removed): with the picker read returning `[]`, BOTH the previously deployed code (9231ec6) and T13's main produced `posts=1 outcome=slot_found` → the doomed POST. With the picker returning 10..16 Nov, both produced `posts=0`. So the empty-picker path is the only one that reproduces the user's log line.
+  - **Root cause**: the slot endpoint does not validate dates — it answers with free slots for days the form has no `<option>` for. Any "assume bookable" branch therefore produces a POST the portal rejects with HTTP 303.
+  - **Fix = fail closed.** A POST now requires *positive* proof: `opened = bool(offered) and target_date in offered`. Unknown (empty picker) keeps the race waiting and never submits.
+  - Kept the user's core requirement intact: an unopened future date is now `not_yet_open` (retry later), **not** `outside_window` (give up). Removed `effective_bookable_last()` so no API implies the arithmetic bound authorises a POST.
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+- None yet.
+
+**Confirmed (user provided):**
+
+- (11-11-2026 01:14:00) "The window for the 17th is not yet open but I want it to try to book as it's in the next 7 days as agreed... keep trying for up to 12 hours" → implemented: never POST an unlisted date, but wait and re-attempt until the portal opens it.
+
+### Subtasks / Plan
+
+- [x] Reproduce which code path POSTs an unopened date (differential test across versions)
+- [x] Make booking fail-closed: require positive picker confirmation before any POST
+- [x] Keep waiting behaviour for unopened future dates (`not_yet_open`, not `outside_window`)
+- [x] Fix scheduler trigger (3) so unlisted desired days are re-attempted on a cadence
+- [x] Add regression tests (empty picker never posts but keeps waiting; opens later → books; scheduler retries → books)
+- [ ] Record the real commit hash after push
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: self-contained recovery knowledge.
+
+**The invariant that must never be broken again**: `submit_booking_fast` may
+only be called when `target_date in portal_bookable_dates(cfg)` is True with a
+NON-EMPTY list. The slot endpoint (`get_available_slots`) returns plausible free
+slots for dates the picker has no option for, so trusting it yields HTTP 303
+"booking not confirmed (slots still available)". Every previous regression
+(T9, T13) came from an "assume bookable when unknown" branch.
+
+**Key locations in `padel_booking.py`**:
+- `run_booking_race` steps (1)/(2)/(3) (~line 2178+): the fail-closed gate —
+  `opened = bool(offered) and target_date in offered`;
+  `if offered and target_date > max(offered): return "not_yet_open"`.
+- `window_limit()` (~860): arithmetic bounds only; docstring now states it is
+  never permission to POST. `effective_bookable_last` was DELETED (dead + misleading).
+- `book_day` outcome handling (~2468): `outside_window`/`not_yet_open` share one
+  branch; past-date vs not-yet-open distinguished via
+  `target_day = getattr(target, "date", lambda: target)()` (book_day receives a
+  `date`, so `.date()` raised AttributeError — caught by the scheduler test).
+- `run_autobook_loop` (~2580+): new `retry_wait_secs = max(60, slot_retry_minutes*60)`
+  and `last_pending_try`; trigger (3) is now `elif fresh or due:` with
+  `pending_now = [d for d in candidates if d not in window_dates]` and
+  `todo = sorted(set(fresh) | (set(pending_now) if due else set()))`.
+
+**Second real bug found while verifying**: trigger (3) only re-attempted dates
+that appeared in the picker (`d not in last_window`). A date the portal never
+lists is never "fresh", so it was never retried — which would have silently
+broken "keep trying until it opens" even after the race fix. The pending-day
+cadence fixes it without hammering the portal every 0.5s.
+
+**Verification**: `python ai/verify_t9_behaviors.py` → ALL PASS (14 checks),
+exit 0. New checks: unreadable picker never posts but waits 3x120s; portal opens
+the day mid-wait → books once; scheduler retries an unopened day then books it
+(posts=1). `py_compile` clean for padel_booking.py, padel_telegram.py, harness.
+
+**Deployment**: merge to main → GH Actions rebuilds
+`hecbr/padel-booking-alrayyana:latest` → user must run
+`docker compose pull && docker compose up -d` on the production host (docker is
+NOT installed on this dev box).
+
+**Known residual risk**: if the portal's picker becomes permanently unreadable,
+the bot waits and never books (fail-closed by design). `/window` prints the
+parsed picker so an operator can spot a parsing break immediately.
 
 ---
 

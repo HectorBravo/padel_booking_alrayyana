@@ -10,6 +10,7 @@ google_events.json
 booking_page.html
 mybooking_page.html
 booking_details.html
+diag_booking_page.html
 
 # Bot log
 daemon.log

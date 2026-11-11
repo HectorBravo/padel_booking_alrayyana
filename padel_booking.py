@@ -795,6 +795,27 @@ def _bookable_dates_store(s, dates: list) -> None:
     _BOOKABLE_DATES_CACHE = (s, time.monotonic(), dates)
 
 
+def _dump_unreadable_picker(html: str) -> None:
+    """Save the booking page when its date picker reads EMPTY (diagnostic).
+
+    An empty picker is what makes ``run_booking_race`` wait forever on a date
+    the browser clearly offers (fail-closed: it cannot prove the day bookable),
+    so the markup that broke parsing has to be inspectable. Written next to the
+    script like the other diag dumps; failure to write must never affect the
+    booking path.
+    """
+    out = HERE / "diag_booking_page.html"
+    try:
+        out.write_text(html)
+        out.chmod(0o600)
+        print(f"{ts_prefix()} [bot] ⚠️ 'Check in date' picker unreadable — page "
+              f"dumped to {out} ({len(html)} chars); check its <select> markup",
+              flush=True)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        print(f"{ts_prefix()} [bot] picker-dump failed (non-fatal): {e}",
+              flush=True)
+
+
 def portal_bookable_dates(cfg: dict, force: bool = False) -> list:
     """The dates the portal currently offers for booking ("Check in date").
 
@@ -813,6 +834,12 @@ def portal_bookable_dates(cfg: dict, force: bool = False) -> list:
         reset_session()
         raise
     dates = parse_booking_dates(html)
+    if not dates:
+        # An empty picker means "unknown", and every decision point then falls
+        # back to arithmetic / refuses to POST (fail-closed). That is also what
+        # makes the bot sit and wait for a date the browser clearly offers — so
+        # dump the page once per refresh to make a parsing break visible.
+        _dump_unreadable_picker(html)
     with _SESSION_LOCK:
         save_session(s)
     _bookable_dates_store(s, dates)

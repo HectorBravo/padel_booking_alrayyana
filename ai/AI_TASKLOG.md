@@ -25,8 +25,8 @@
 - **Created**: 11-11-2026 04:23:36
 - **Last Updated**: 11-11-2026 04:28:30
 - **Time Spent**: 12m
-- **Branch**: [`fix/ai-log-unreadable-picker-dump`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-log-unreadable-picker-dump)
-- **Commit(s)**: pending
+- **Branch**: [`fix/ai-log-unreadable-picker-dump`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-log-unreadable-picker-dump) (merged into `main`, branch deleted)
+- **Commit(s)**: [90131f6](https://github.com/HectorBravo/padel_booking_alrayyana/commit/90131f6) (`docs(ai)` log before push), [bcb3967](https://github.com/HectorBravo/padel_booking_alrayyana/commit/bcb3967) (diag dump + warn), [8cf58a5](https://github.com/HectorBravo/padel_booking_alrayyana/commit/8cf58a5) (`docs(ai)` log T16 done), [725e46f](https://github.com/HectorBravo/padel_booking_alrayyana/commit/725e46f) (datepicker startDate/endDate range fix — now `main` tip)
 - **Blockers**: none
 - **Findings & Notes**:
   - User's log line `Tue 17 Nov is inside the portal's window (offered so far up to Tue 17 Nov, picker unreadable) ... refreshing in 2 min` while the browser shows 17 Nov bookable.

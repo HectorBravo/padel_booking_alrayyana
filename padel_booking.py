@@ -728,6 +728,34 @@ def _option_date(text: str, today, day_month_only: bool = False):
     return None
 
 
+def _datepicker_range(soup, today):
+    """Enumerate the dates offered by a jQuery UI datepicker input.
+
+    The portal's live booking page has NO <select> for the check-in date: it
+    uses ``<input type="text" id="check_in_date">`` driven by
+    ``$('#check_in_date').datepicker({startDate:new Date($('#startDate').val()),
+    endDate:new Date($('#endDate').val())})`` (see diag_booking_page.html:1173-1179).
+    The selectable range therefore lives in the hidden inputs ``startDate`` /
+    ``endDate`` (values like "Nov 11, 2026"), and the server validates a posted
+    date against exactly that range. Returns the inclusive list of dates, or
+    ``[]`` when either bound is missing or unparsable.
+    """
+    bounds = {}
+    for name in ("startDate", "endDate"):
+        node = soup.find("input", attrs={"id": name}) or soup.find(
+            "input", attrs={"name": name})
+        if node is not None:
+            bounds[name] = _option_date(node.get("value"), today)
+    first = bounds.get("startDate")
+    last = bounds.get("endDate")
+    if not first or not last or last < first:
+        return []
+    # Guard against a pathological range: the rolling window is only ever a few
+    # days wide, so cap it generously rather than enumerating an unbounded span.
+    span = min((last - first).days, 90)
+    return [first + timedelta(days=i) for i in range(span + 1)]
+
+
 def parse_booking_dates(html: str, today=None) -> list:
     """Extract the dates offered by the portal's "Check in date" picker.
 
@@ -736,11 +764,22 @@ def parse_booking_dates(html: str, today=None) -> list:
     to the arithmetic window and never read "empty" as "nothing is bookable".
 
     Parsing is deliberately structure-agnostic (the markup is not pinned to a
-    tested sample): a <select> whose name/id mentions the check-in date wins;
-    otherwise the <select> offering the most parseable dates is used.
+    tested sample): a jQuery UI datepicker driven by hidden ``startDate``/``endDate``
+    inputs wins when present (that is what the live portal uses); otherwise a <select>
+    whose name/id mentions the check-in date; otherwise the <select> offering the
+    most parseable dates.
     """
     soup = BeautifulSoup(html, "html.parser")
     today = today or datetime.now().date()
+
+    # The live portal has no date <select> at all — the picker is a jQuery UI
+    # datepicker whose bounds sit in hidden inputs. Read that first so a real
+    # booking page never falls back to arithmetic (which made the bot wait
+    # forever on days the browser clearly offered).
+    range_dates = _datepicker_range(soup, today)
+    if range_dates:
+        return sorted(set(range_dates))
+
     selects = soup.find_all("select")
     if not selects:
         return []
@@ -808,12 +847,18 @@ def _dump_unreadable_picker(html: str) -> None:
     try:
         out.write_text(html)
         out.chmod(0o600)
-        print(f"{ts_prefix()} [bot] ⚠️ 'Check in date' picker unreadable — page "
-              f"dumped to {out} ({len(html)} chars); check its <select> markup",
-              flush=True)
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except OSError as e:
         print(f"{ts_prefix()} [bot] picker-dump failed (non-fatal): {e}",
               flush=True)
+        return
+    # The console may be cp1252 on Windows: never let a log line abort the
+    # booking path, and keep the dump itself independent of it.
+    msg = (f"{ts_prefix()} [bot] ⚠️ 'Check in date' picker unreadable — page "
+           f"dumped to {out} ({len(html)} chars); check its <select> markup")
+    try:
+        print(msg, flush=True)
+    except UnicodeEncodeError:
+        print(msg.encode("ascii", "replace").decode("ascii"), flush=True)
 
 
 def portal_bookable_dates(cfg: dict, force: bool = False) -> list:

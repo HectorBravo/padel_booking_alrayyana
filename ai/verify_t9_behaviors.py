@@ -353,6 +353,29 @@ def disabled_option_check():
 results.append(picker_ceiling_check())
 results.append(disabled_option_check())
 
+# --- THE live portal: a jQuery datepicker with hidden startDate/endDate ----
+def datepicker_range_check():
+    """The real booking page has NO <select>: the picker bounds are hidden inputs.
+
+    Reproduces the live markup (diag_booking_page.html): an input
+    id="check_in_date" plus hidden startDate/endDate ("Nov 11, 2026"/"Nov 17,
+    2026"). The bot must enumerate that inclusive range so a date the browser
+    offers is recognised as bookable (the false-negative that made it wait).
+    """
+    html = ('<input type="text" id="check_in_date" name="check_in_date">'
+            '<input type="hidden" id="startDate" value="Nov 11, 2026">'
+            '<input type="hidden" id="endDate" value="Nov 17, 2026">'
+            '<input type="hidden" id="interval" value="1">')
+    dates = pb.parse_booking_dates(html)
+    ok = (len(dates) == 7 and dates[0].day == 11 and dates[-1].day == 17)
+    print(f"[{'PASS' if ok else 'FAIL'}] hidden startDate/endDate datepicker "
+          f"range is enumerated")
+    print(f"        parsed -> {dates}")
+    return ok
+
+
+results.append(datepicker_range_check())
+
 # --- THE production case: picker unreadable -> wait, and NEVER post --------
 def unreadable_picker_never_posts_check():
     """The 11-11-2026 01:12 failure.

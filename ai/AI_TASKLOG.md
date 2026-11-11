@@ -4,7 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 3/5 | 5m | none |
+| 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 12m | none |
 | 11-11-2026 02:50:02 | [T15: Merge every AI branch into main and delete them](#task-t15-merge-every-ai-branch-into-main-and-delete-them) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span> | 5/5 | 4m | none |
 
 | 11-11-2026 01:14:00 | [T14: Stop POSTing unopened dates (fail-closed) and keep retrying them](#task-t14-stop-posting-unopened-dates-fail-closed-and-keep-retrying-them) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 6/6 | 11m | none |
@@ -20,11 +20,11 @@
 
 ## Task T16: Diagnose the unreadable picker that makes waits pointless
 
-- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 11-11-2026 04:23:36
-- **Last Updated**: 11-11-2026 04:28:00
-- **Time Spent**: 5m
+- **Last Updated**: 11-11-2026 04:28:30
+- **Time Spent**: 12m
 - **Branch**: [`fix/ai-log-unreadable-picker-dump`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-log-unreadable-picker-dump)
 - **Commit(s)**: pending
 - **Blockers**: none
@@ -34,24 +34,28 @@
   - With an empty picker, `run_booking_race` step (2) (`opened = bool(offered) and target_date in offered`, `:2179`) can never be True → slots are not even queried → the race waits forever. Fail-closed is correct for *unknown*, but here it is a **false negative**: the day IS offered, parsing just fails.
   - This is the residual risk already noted at T14's log (`ai/AI_TASKLOG.md:170`). Nothing in the log says *why* parsing failed → undiagnosable from the host.
   - **Fix (diagnostic first)**: `_dump_unreadable_picker(html)` writes `diag_booking_page.html` + a WARNING line on every empty picker read, so the live markup can be inspected and the parser corrected. Dump failure is non-fatal (`except Exception`, not `OSError` — cp1252 consoles raise UnicodeEncodeError on the emoji).
+  - **RESOLVED root cause (live proof, OTP 817471)**: the booking page has **NO date `<select>`**. The picker is a jQuery UI datepicker bound to `<input type="text" id="check_in_date" name="check_in_date">` (`diag_booking_page.html:925-927`), configured at `:1173-1179` with `startDate:new Date($('#startDate').val())`, `endDate:new Date($('#endDate').val())`. The bounds sit in hidden inputs at `:1027-1030`: `startDate=Nov 11, 2026`, `endDate=Nov 17, 2026`, `interval=1`, `recurrence=W`. So 17 Nov IS selectable today — exactly what the browser showed.
+  - **Fix (parser)**: added `_datepicker_range(soup, today)` that reads those hidden `startDate`/`endDate` inputs and returns the inclusive enumerated range; `parse_booking_dates` now prefers it over `<select>` parsing. Live `window` now prints "Opened by 'Check in date': Wed 11 Nov .. Tue 17 Nov 2026 (7 of 7 days)"; `autobook 2026-11-17 --dry-run` selects 19:00 immediately (no wait, no "picker unreadable").
 
 ### User Confirmations
 
 **Pending (awaiting user response):**
 
-- [ ] (11-11-2026 04:28:00) Paste the OTP from your email inbox so `login-finish <OTP>` can run, then `python padel_booking.py window` will dump the live page and reveal the picker markup.
+- None yet.
 
 **Confirmed (user provided):**
 
 - (11-11-2026 04:23:36) "Why does the bot keep waiting when the day is already bookable?" → Because the picker read returned empty; root cause = `parse_booking_dates` not matching the live markup. Confirmed by code path, pending live proof.
+- (11-11-2026 04:26:43) "OTP 794343" → expired at login-finish ("OTP expired"); re-ran login-start.
+- (11-11-2026 04:27:08) "OTP 817471" → login succeeded, session saved; enabled the live page dump.
 
 ### Subtasks / Plan
 
 - [x] Trace the log line to its branch and prove `offered == []` — done (`:2207` clause + `:2179` opened check)
-- [x] Add `_dump_unreadable_picker(html)` in `portal_bookable_dates` (empty-read path) + WARNING log line
+- [x] Add `_dump_unreadable_picker(html)` in `portal_bookable_dates` (empty-read path) + WARNING log line (cp1252-safe)
 - [x] Add `diag_booking_page.html` to `.gitignore` (Debug artifacts block)
-- [ ] Obtain a live booking page (needs OTP from user) and confirm why parsing fails
-- [ ] Correct `parse_booking_dates` for the real markup, then re-run `ai/verify_t9_behaviors.py`
+- [x] Obtain a live booking page (OTP 817471) and confirm why parsing fails — the picker is a jQuery UI datepicker on `<input id="check_in_date">`, NOT a `<select>`; bounds in hidden `startDate`/`endDate` inputs (`diag_booking_page.html:925-927,1027-1030,1173-1179`)
+- [x] Correct `parse_booking_dates` for the real markup (added `_datepicker_range()` enumerating startDate..endDate; prefers it over `<select>`), then re-run `ai/verify_t9_behaviors.py` → ALL PASS (14 checks incl. new `datepicker_range_check`)
 
 ### Full Context Notes for AI Agents
 

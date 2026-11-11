@@ -4,7 +4,9 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 3/5 | 5m | none |
 | 11-11-2026 02:50:02 | [T15: Merge every AI branch into main and delete them](#task-t15-merge-every-ai-branch-into-main-and-delete-them) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span> | 5/5 | 4m | none |
+
 | 11-11-2026 01:14:00 | [T14: Stop POSTing unopened dates (fail-closed) and keep retrying them](#task-t14-stop-posting-unopened-dates-fail-closed-and-keep-retrying-them) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 6/6 | 11m | none |
 | 11-11-2026 01:04:22 | [T13: Treat the picker as the real window limit (7-day assumption is wrong)](#task-t13-treat-the-picker-as-the-real-window-limit-7-day-assumption-is-wrong) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 14m | none |
 | 11-11-2026 00:50:01 | [T12: Telegram notice on first retry while a day is unavailable](#task-t12-telegram-notice-on-first-retry-while-a-day-is-unavailable) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 8m | none |
@@ -13,6 +15,79 @@
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
 
 > ✅ **15 completed task(s)** — [View completed tasks](#completed-tasks)
+
+---
+
+## Task T16: Diagnose the unreadable picker that makes waits pointless
+
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
+- **Created**: 11-11-2026 04:23:36
+- **Last Updated**: 11-11-2026 04:28:00
+- **Time Spent**: 5m
+- **Branch**: [`fix/ai-log-unreadable-picker-dump`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-log-unreadable-picker-dump)
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - User's log line `Tue 17 Nov is inside the portal's window (offered so far up to Tue 17 Nov, picker unreadable) ... refreshing in 2 min` while the browser shows 17 Nov bookable.
+  - The `, picker unreadable` clause at `padel_booking.py:2207` prints **only when `offered == []`**, so `portal_bookable_dates()` returned empty → `parse_booking_dates()` found no parsable date `<select>`.
+  - With an empty picker, `run_booking_race` step (2) (`opened = bool(offered) and target_date in offered`, `:2179`) can never be True → slots are not even queried → the race waits forever. Fail-closed is correct for *unknown*, but here it is a **false negative**: the day IS offered, parsing just fails.
+  - This is the residual risk already noted at T14's log (`ai/AI_TASKLOG.md:170`). Nothing in the log says *why* parsing failed → undiagnosable from the host.
+  - **Fix (diagnostic first)**: `_dump_unreadable_picker(html)` writes `diag_booking_page.html` + a WARNING line on every empty picker read, so the live markup can be inspected and the parser corrected. Dump failure is non-fatal (`except Exception`, not `OSError` — cp1252 consoles raise UnicodeEncodeError on the emoji).
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+- [ ] (11-11-2026 04:28:00) Paste the OTP from your email inbox so `login-finish <OTP>` can run, then `python padel_booking.py window` will dump the live page and reveal the picker markup.
+
+**Confirmed (user provided):**
+
+- (11-11-2026 04:23:36) "Why does the bot keep waiting when the day is already bookable?" → Because the picker read returned empty; root cause = `parse_booking_dates` not matching the live markup. Confirmed by code path, pending live proof.
+
+### Subtasks / Plan
+
+- [x] Trace the log line to its branch and prove `offered == []` — done (`:2207` clause + `:2179` opened check)
+- [x] Add `_dump_unreadable_picker(html)` in `portal_bookable_dates` (empty-read path) + WARNING log line
+- [x] Add `diag_booking_page.html` to `.gitignore` (Debug artifacts block)
+- [ ] Obtain a live booking page (needs OTP from user) and confirm why parsing fails
+- [ ] Correct `parse_booking_dates` for the real markup, then re-run `ai/verify_t9_behaviors.py`
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: Self-contained knowledge base to resume without other context.
+
+**Symptom (user's log)**: `[11/11/2026 04:18:30] [bot] Tue 17 Nov is inside the portal's window (offered so far up to Tue 17 Nov, picker unreadable) but the portal has not opened this date yet; refreshing in 2 min...` — meanwhile the browser shows 17 Nov selectable.
+
+**Code path that produces it** (`padel_booking.py`, current line numbers after T16 edits):
+- `run_booking_race:2065` loop → `offered = portal_bookable_dates(cfg)` at `:2167`.
+- Hard ceiling check `if offered and target_date > max(offered): return not_yet_open` at `:2170` — skipped when `offered == []` (unreadable must NOT refuse, comment at `:2162-2165`).
+- `opened = bool(offered) and target_date in offered` at `:2179` → **False** for empty picker. The slot query (`get_available_slots`, `:2184`) is inside `if opened:` so it never runs; hence the log says "not opened this date yet" even though the day is open.
+- Wait branch prints at `:2205-2208`; `{'' if offered else ', picker unreadable'}` at `:2207` is the ONLY place that clause appears → proves `offered == []`.
+
+**Why empty**: `parse_booking_dates(html, today)` (was `:731`, now ~`:755` after this insertion; body unchanged) returns `[]` when: no `<select>` tags at all (`if not selects: return []`), or the named date select (`_BOOKABLE_DATE_SELECT_NAMES`) yields no parsable option, or unnamed selects' options don't match `_option_date` formats in `_BOOKABLE_DATE_FORMATS` / `_BOOKABLE_DAYMONTH_FORMATS`.
+- `portal_bookable_dates(cfg, force)` (was `:798`, now ~`:822`) → now calls `_dump_unreadable_picker(html)` when `dates == []`; `_dump_unreadable_picker` inserted just before it (writes `HERE / "diag_booking_page.html"`, chmod 600, prints WARNING with `ts_prefix()`).
+- Cache: `_BOOKABLE_DATES_TTL` (60 s) via `_bookable_dates_cached/_store`.
+
+**T13/T14 context (do not regress)**: picker's last date is the real ceiling; POST requires positive picker membership (`submit_booking_fast` only when `target_date in portal_bookable_dates(cfg)` with a NON-EMPTY list). Empty picker = "unknown" → arithmetic fallback + never POST. Do NOT weaken that to "assume bookable".
+
+**Environment facts**:
+- Repo: `D:\Repos\padel_booking_alrayyana`, remote `git@github.com:HectorBravo/padel_booking_alrayyana.git`, base branch `main` tip `11c6ff1`. User email `hbravo@cuic.net`. Windows/PowerShell; console cp1252 → emoji prints raise UnicodeEncodeError unless the stream is reconfigured (`padel_telegram.py:64` does it for the bot, CLI does not).
+- Live config `config.json` (gitignored): `asset_booking_id="370"`, no `booking_window_days` → 7. Preferred slots: sunday/tuesday/saturday.
+- Portal: `BASE_URL=https://myportal.asteco.com`; booking page `GET /asset/assetbooking/370` (`fetch_booking_page`); slot API does NOT validate dates (why the 303 bug happened).
+
+**Live-proof status**: `session.json` dated 27/09/2026 → `login-status` prints `Session valid: False`. `login-start` was run at 11-11-2026 04:21:39 and stashed `pending_login.json`; **`login_finish` needs the OTP number from the user's email** — cannot be obtained non-interactively. Once provided:
+```
+python padel_booking.py login-finish <OTP>
+python padel_booking.py window        # force=True read → dumps diag_booking_page.html if picker empty
+```
+Then inspect `diag_booking_page.html` for `<select>` markup and fix `_option_date`/`parse_booking_dates`.
+
+**Verification**: `python -m py_compile padel_booking.py` (passes); `python ai/verify_t9_behaviors.py` must still end in `ALL PASS` (13 checks; patches `portal_bookable_dates`, so the new dump hook is not exercised by it — safe).
+
+**Deploy path**: branch → PR → merge to `main` → `.github/workflows/docker-publish.yml` rebuilds `hecbr/padel-booking-alrayyana`; host runs `docker compose pull && docker compose up -d` (entrypoint re-copies `.py` from `/opt/padel`). Docker is NOT installed on this dev box.
+
+**Next step on resume**: if the OTP answer arrived, run login-finish + window, read `diag_booking_page.html`, and correct the parser; else finish log/commit/push for the diagnostic part only.
 
 ---
 

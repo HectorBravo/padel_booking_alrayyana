@@ -12,10 +12,10 @@
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
 - **Created**: 13-11-2026 13:34:10
-- **Last Updated**: 13-11-2026 13:50:00
-- **Time Spent**: 18m
+- **Last Updated**: 13-11-2026 18:45:10
+- **Time Spent**: 25m
 - **Branch**: [`feat/ai-auto-capture-otp-from-gmail`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/feat/ai-auto-capture-otp-from-gmail) (merged into `main` via [PR #12](https://github.com/HectorBravo/padel_booking_alrayyana/pull/12))
-- **Commit(s)**: [f9eb1d1](https://github.com/HectorBravo/padel_booking_alrayyana/commit/f9eb1d1c6b7c4dd462e24475b324e108f8091616) (`docs(ai)` log before push), [45138de](https://github.com/HectorBravo/padel_booking_alrayyana/commit/45138dec9f652079a00b0763b80061fe24e1432d) (feat — Gmail OTP capture), [ab69b07](https://github.com/HectorBravo/padel_booking_alrayyana/commit/ab69b07cf071841e9977c889cc1e83a96a0ebf9a) (`docs(ai)` log for push), merge [eb60198](https://github.com/HectorBravo/padel_booking_alrayyana/commit/eb60198334da47c19f4bb7c869a65f3e14b694e3)
+- **Commit(s)**: [f9eb1d1](https://github.com/HectorBravo/padel_booking_alrayyana/commit/f9eb1d1c6b7c4dd462e24475b324e108f8091616) (`docs(ai)` log before push), [45138de](https://github.com/HectorBravo/padel_booking_alrayyana/commit/45138dec9f652079a00b0763b80061fe24e1432d) (feat — Gmail OTP capture), [ab69b07](https://github.com/HectorBravo/padel_booking_alrayyana/commit/ab69b07cf071841e9977c889cc1e83a96a0ebf9a) (`docs(ai)` log for push), merge [eb60198](https://github.com/HectorBravo/padel_booking_alrayyana/commit/eb60198334da47c19f4bb7c869a65f3e14b694e3), [41841b8](https://github.com/HectorBravo/padel_booking_alrayyana/commit/41841b82d9d37175cef4c7211907bdb65a51180b) (helper for re-auth), [6b89614](https://github.com/HectorBravo/padel_booking_alrayyana/commit/6b89614523fd5485918846663c508b053c89d92d) (fix — real email markup + live proof)
 - **Blockers**: none (one user action left: re-run `google-auth`, see User Confirmations)
 - **Findings & Notes**:
   - New module **`google_otp.py`** (~10.5 KB): `capture_otp(cfg, log, skip)` → `(otp, error)`. Polls Gmail `from:asteco.com` (`maxResults=10`, newest first), requires the sender domain **and** the body phrase `<digits> is your ASTECO OTP` (case-insensitive, `\s+` tolerant), **5 s between checks, 12 attempts max** (~1 minute). Never raises — every caller can degrade to the manual flow.
@@ -24,7 +24,8 @@
   - Body decoding handles base64url (unpadded), nested `multipart/alternative`, and both text/html + text/plain.
   - One consent now covers both integrations: `AUTH_SCOPE = calendar + gmail.readonly` used by `generate_auth_url` **and** `run_google_auth`; `google_otp` refreshes with that scope explicitly so a re-authorised token is upgraded. Verified `generate_auth_url` emits both scopes (`both scopes in url: True`).
   - Tests: new `ai/verify_t17_otp_capture.py` → **17/17 checks**; existing `ai/verify_t9_behaviors.py` → **ALL PASS**; `py_compile` clean for all modules.
-  - **Pre-existing issue found (not caused by this task)**: the refresh token in `config.json` is rejected by Google — `POST oauth2.googleapis.com/token` → **400 `invalid_grant`** both with no scope and with `gmail.readonly`. This also breaks the existing Calendar sync (`google-test`). Until re-auth, the new code fails fast with `Re-run 'google-auth' (or /setupgoogle).` and falls back to the manual OTP path — confirmed live.
+  - **Pre-existing issue found (not caused by this task)**: the refresh token in `config.json` is rejected by Google — `POST oauth2.googleapis.com/token` → **400 `invalid_grant`** both with no scope and with `gmail.readonly`. This also breaks the existing Calendar sync (`google-test`). Until re-auth, the new code fails fast with `Re-run 'google-auth' (or /setupgoogle).` and falls back to the manual OTP path — confirmed live. **RESOLVED 13-11-2026 18:41**: user re-authorised (pasted the OAuth code into the exchange helper); granted scopes confirmed `auth/calendar` + `auth/gmail.readonly`, and live capture returned the real OTP.
+  - **Live-proof fix**: the real OTP email wraps the code in markup — `<b>315813</b> is your ASTECO OTP` (sender `Asteco <donotreply@asteco.com>`). The original regex required whitespace between digits and "is", so extraction failed (`no_code`) even though the message was found. Fix: bounded gap `(?:\s|</?[a-zA-Z][^>]*>|&\w+;|"|'){0,30}` — matches tags/entities/quotes but not letters, so it cannot skip over the "is" of another sentence. Suite extended with the exact live markup → 18/18.
 
 ### User Confirmations
 
@@ -35,7 +36,7 @@
 **Confirmed (user provided):**
 
 - (13-11-2026 13:44:00) "Merge vs live proof first?" → "Merge PR #12 now, then help me run the google-auth re-authorisation"
-- (13-11-2026 13:40:00) "The stored Google refresh token is rejected (400 `invalid_grant`) — Gmail capture cannot be proven live until you re-run `google-auth`. Proceed on that basis?" → answered by the merge decision above (proceed; re-auth to follow)
+- (13-11-2026 18:41:00) Authorization code pasted for the OAuth exchange → tokens exchanged successfully; granted scopes confirmed as `auth/calendar` + `auth/gmail.readonly`; live capture then returned OTP `315813` from the real inbox.
 
 ### Full Context Notes for AI Agents
 
@@ -49,7 +50,7 @@
 - **CLI**: `login-finish` with no argument → auto-capture when Google is enabled; `login-start` also auto-completes when Google is configured (so `login-start && slots` works unattended), and falls back to printing the manual instructions.
 - **Telegram**: `_on_login` / `_relogin` try Gmail capture first (notify "reading your inbox"), keep the manual OTP path as fallback.
 - **Test harness**: `ai/verify_t17_otp_capture.py` — patches the token/Gmail HTTP calls with synthetic OTP messages and asserts parse/filter/retry/fallback behaviour; plus `ai/verify_t9_behaviors.py` regression run.
-- **NEXT (user action, to prove it live)**: re-authorise Google so the token gains `gmail.readonly`. The OAuth flow needs a browser + a listener on **port 8010** at redirect URI `https://padel-booking.destr0.com/callback` (the code param can also be pasted back). Then `python padel_booking.py google-test` (Calendar works) and `python padel_booking.py login-start` should log in with no OTP typed. Verify the token covers Gmail by refreshing it and calling `GET gmail/v1/users/me/messages?q=from:asteco.com`. If Google still answers `invalid_grant`, revoke at https://myaccount.google.com/permissions and retry (the app is in OAuth *Testing* mode — the account must stay a test user).
+- **NEXT (user action, to prove it live)**: ~~re-authorise Google~~ **DONE 13-11-2026 18:41** — user pasted the OAuth code; `ai/google_auth_reauth.py` exchanged it and config.json now holds a fresh refresh token with Calendar + Gmail read scopes. Live proof succeeded (OTP `315813`). If Google ever revokes again (`invalid_grant`), re-run `google-auth` / `/setupgoogle`; revoke at https://myaccount.google.com/permissions if consent is cached without a refresh_token.
 
 ### Subtasks / Plan
 
@@ -60,7 +61,7 @@
 - [x] Update docs + packaging: README, TELEGRAM.md, `.gitignore`/`.dockerignore` (`last_otp.txt`), `Dockerfile` + `entrypoint.sh` (ship `google_otp.py`)
 - [x] Write `ai/verify_t17_otp_capture.py` (synthetic Gmail responses) and make it pass → **17/17 checks**
 - [x] Run existing `ai/verify_t9_behaviors.py` regression → **ALL PASS**
-- [ ] Live proof against the real mailbox (**blocked**: the stored refresh token returns 400 `invalid_grant`; needs one re-auth with the new Gmail scope)
+- [x] Live proof against the real mailbox → **OTP `315813` captured** (the 3-hours-ago email); required one fix: the portal wraps the code in HTML (`<b>315813</b> is your ASTECO OTP`), which the plain `\s+` gap regex missed → gap now tolerates tags/entities/quotes (commit [6b89614](https://github.com/HectorBravo/padel_booking_alrayyana/commit/6b89614523fd5485918846663c508b053c89d92d)); suite now **18/18**
 - [x] Commit + push branch, open PR → [`feat/ai-auto-capture-otp-from-gmail`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/feat/ai-auto-capture-otp-from-gmail), [PR #12](https://github.com/HectorBravo/padel_booking_alrayyana/pull/12)
 
 ---

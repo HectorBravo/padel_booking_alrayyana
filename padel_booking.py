@@ -2439,6 +2439,12 @@ def cmd_keepalive(cfg: dict, _args: list) -> None:
 def cmd_telegram(cfg: dict, _args: list) -> None:
     """CLI: run the interactive Telegram bot (long polling)."""
     from padel_telegram import PadelBot  # local import keeps the CLI light
+    # Keep the OAuth callback endpoint alive for the whole session so
+    # https://padel-booking.destr0.com/callback (forwarded here by nginx as
+    # http://ububu.lan:8010) answers instead of returning 502. The bot can then
+    # complete a Google consent without anyone pasting the code.
+    from google_calendar import serve_callback_forever
+    serve_callback_forever()
     try:
         PadelBot(cfg).run()
     except KeyboardInterrupt:

@@ -6,6 +6,7 @@ booked.json
 telegram_state.json
 google_events.json
 last_otp.txt
+oauth_callback.json
 
 # Debug artifacts
 booking_page.html

@@ -30,6 +30,13 @@ CONFIG_FILE = HERE / "config.json"
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+# Where the always-on callback server parks an authorization code so a later
+# `google-auth` run (a different process) can pick it up without the user
+# pasting anything from the browser.
+OAUTH_CALLBACK_FILE = HERE / "oauth_callback.json"
+# True while a persistent callback listener (serve_callback_forever) owns the
+# port, so callers never stack a second server on top of it.
+CALLBACK_SERVER_RUNNING = False
 CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 SCOPE = "https://www.googleapis.com/auth/calendar"
 # The consent we ask for: Calendar (read/write) + Gmail read-only.  The Gmail
@@ -277,13 +284,25 @@ def start_callback_server(port: int = 8010) -> tuple:
 
     Returns (result_dict, server).  The result_dict will contain
     'code' or 'error' once the callback is received.
+
+    Accepts GET *and* POST (Google's redirect is always GET, but a proxy in
+    front of this server could convert it), and answers any path starting with
+    /callback so a prefixed reverse-proxy URI still lands here.  The response
+    page tells the user nothing more is needed — the bot picks the code up
+    from the URL itself.
+
+    It always serves **plain HTTP**: TLS for
+    https://padel-booking.destr0.com/callback is terminated by the nginx
+    reverse proxy on huevo.lan, which forwards to this server at
+    http://ububu.lan:8010 (see sites-available/padel-booking.destr0.com.conf).
+    The container therefore never needs its own certificate.
     """
     result: dict = {}
 
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
+        def _handle(self):
             parsed = urlparse(self.path)
-            if parsed.path == "/callback":
+            if parsed.path.startswith("/callback"):
                 params = parse_qs(parsed.query)
                 if "code" in params:
                     result["code"] = params["code"][0]
@@ -301,26 +320,126 @@ def start_callback_server(port: int = 8010) -> tuple:
                     self.send_response(400)
                     self.end_headers()
                 else:
-                    self.send_response(400)
+                    # A bare visit (browser refresh, health check): harmless.
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
                     self.end_headers()
+                    self.wfile.write(
+                        b"<html><body>Padel booking OAuth callback endpoint."
+                        b"</body></html>")
             else:
                 self.send_response(404)
                 self.end_headers()
+
+        def do_GET(self):
+            self._handle()
+
+        def do_POST(self):
+            self._handle()
+
+        def log_message(self, fmt, *args):
+            pass
+
+    server = HTTPServer(("0.0.0.0", port), Handler)
+
+    def _one():
+        server.handle_request()
+
+    t = threading.Thread(target=_one, daemon=True)
+    t.start()
+    return result, server
+
+
+def _callback_port_in_use(port: int) -> bool:
+    """True if something is already listening on ``port``.
+
+    A standalone ``google-auth`` run uses this to tell whether the resident bot
+    already owns the callback port (so it should poll OAUTH_CALLBACK_FILE rather
+    than try to bind — which would fail with 'address already in use').
+    """
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        try:
+            s.connect(("127.0.0.1", port))
+        except OSError:      # refused/timeout -> nothing there
+            return False
+        return True
+
+
+def serve_callback_forever(port: int = 8010) -> bool:
+    """Keep answering /callback on ``port`` for as long the process lives.
+
+    Called by the long-running commands (telegram / autobooking) so the URL
+    Google redirects to — https://padel-booking.destr0.com/callback, which the
+    nginx proxy on huevo.lan forwards here as http://ububu.lan:8010 — always
+    has something listening behind it.  Without this the reverse proxy answers
+    502 Bad Gateway whenever no ``google-auth`` run is holding the port, and
+    the browser shows an error page after authorising.
+
+    Each request writes the code/error to OAUTH_CALLBACK_FILE (a small JSON
+    next to this module) so a separate ``google-auth`` process can read it back,
+    then replies with the "Authorized!" page.  Returns False if the port is busy
+    (another process already owns it) so callers can just log and carry on.
+    """
+    global CALLBACK_SERVER_RUNNING
+    if CALLBACK_SERVER_RUNNING:
+        return True  # already serving; don't stack a second listener
+
+    class Handler(BaseHTTPRequestHandler):
+        def _handle(self):
+            parsed = urlparse(self.path)
+            if parsed.path.startswith("/callback"):
+                params = parse_qs(parsed.query)
+                payload = {}
+                if "code" in params:
+                    payload["code"] = params["code"][0]
+                elif "error" in params:
+                    payload["error"] = params["error"][0]
+                if payload:
+                    try:
+                        OAUTH_CALLBACK_FILE.write_text(
+                            json.dumps(payload), encoding="utf-8")
+                    except OSError as e:
+                        print(f"[callback] could not save code: {e}")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(
+                    b"<html><body style='font-family:sans-serif;"
+                    b"text-align:center;padding:50px;'>"
+                    b"<h2 style='color:green;'>Authorized!</h2>"
+                    b"<p>Close this tab and go back to Telegram."
+                    b"</p></body></html>")
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def do_GET(self):
+            self._handle()
+
+        def do_POST(self):
+            self._handle()
 
         def log_message(self, fmt, *args):
             pass
 
     try:
-        server = HTTPServer(("0.0.0.0", port), Handler)
+        httpd = HTTPServer(("0.0.0.0", port), Handler)
     except OSError as e:
-        raise GoogleCalendarError(f"Could not start server on port {port}: {e}")
+        print(f"[callback] could not bind port {port}: {e}")
+        return False
 
-    def _handle():
-        server.handle_request()
+    CALLBACK_SERVER_RUNNING = True
+    def _loop():
+        while True:
+            try:
+                httpd.handle_request()
+            except Exception:      # socket hiccup during shutdown; keep alive
+                continue
 
-    t = threading.Thread(target=_handle, daemon=True)
-    t.start()
-    return result, server
+    threading.Thread(target=_loop, daemon=True).start()
+    return True
 
 
 def exchange_code_for_tokens(code: str, client_id: str,
@@ -426,63 +545,45 @@ def run_google_auth(cfg: dict, client_id: str = "",
         "access_type": "offline", "prompt": "consent",
     }
     auth_url = f"{AUTH_URL}?{urlencode(auth_params)}"
-    result: dict = {}
 
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            parsed = urlparse(self.path)
-            if parsed.path == "/callback":
-                params = parse_qs(parsed.query)
-                if "code" in params:
-                    result["code"] = params["code"][0]
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/html")
-                    self.end_headers()
-                    self.wfile.write(
-                        b"<html><body style='font-family:sans-serif;"
-                        b"text-align:center;padding:50px;'>"
-                        b"<h2 style='color:green;'>Authorized!</h2>"
-                        b"<p>Close this tab and go back to the terminal."
-                        b"</p></body></html>")
-                elif "error" in params:
-                    result["error"] = params["error"][0]
-                    self.send_response(400)
-                    self.send_header("Content-Type", "text/html")
-                    self.end_headers()
-                    err = params["error"][0].encode()
-                    self.wfile.write(
-                        b"<html><body style='font-family:sans-serif;"
-                        b"text-align:center;padding:50px;'>"
-                        b"<h2 style='color:red;'>Authorization failed</h2>"
-                        b"<p>" + err + b"</p></body></html>")
-                else:
-                    self.send_response(400)
-                    self.end_headers()
-            else:
-                self.send_response(404)
-                self.end_headers()
-
-        def log_message(self, fmt, *args):
-            pass
-
+    # Prefer the always-on listener if the bot is already running it: we then
+    # just poll OAUTH_CALLBACK_FILE for the code nginx forwards here. Otherwise
+    # (standalone google-auth) bring up a one-shot server on this port.
     try:
-        server = HTTPServer(("0.0.0.0", port), Handler)
-    except OSError as e:
-        print(f"ERROR: Could not start local server on port {port}: {e}")
-        sys.exit(1)
+        OAUTH_CALLBACK_FILE.unlink(missing_ok=True)  # ignore any stale code
+    except OSError:
+        pass
+
+    persistent = CALLBACK_SERVER_RUNNING or _callback_port_in_use(port)
+
+    def _wait_for_file(timeout: int = 120) -> dict:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                return json.loads(OAUTH_CALLBACK_FILE.read_text(encoding="utf-8"))
+            except (FileNotFoundError, OSError, ValueError):
+                time.sleep(1.0)
+        return {}
 
     print("Opening browser for Google authorization...")
     print(f"If it doesn't open, visit:\n  {auth_url}")
     webbrowser.open(auth_url)
     print("Waiting for authorization (2 min timeout)...")
 
-    def _handle():
-        server.handle_request()
+    if persistent:
+        result = _wait_for_file()
+    else:
+        result, server = start_callback_server(port)
 
-    t = threading.Thread(target=_handle, daemon=True)
-    t.start()
-    t.join(timeout=120)
-    server.server_close()
+        def _handle():
+            server.handle_request()
+
+        t = threading.Thread(target=_handle, daemon=True)
+        t.start()
+        t.join(timeout=120)
+        server.server_close()
+        if not result:
+            result = _wait_for_file(timeout=5)
 
     if "error" in result:
         print(f"ERROR: Google authorization failed: {result['error']}")

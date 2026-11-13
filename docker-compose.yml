@@ -16,6 +16,11 @@ services:
       - padel-data:/app
       - ./config.json:/app/config.json
     ports:
+      # OAuth callback (https://padel-booking.destr0.com/callback): nginx on
+      # huevo.lan terminates TLS for that domain and forwards here as
+      # http://ububu.lan:8010, so the bot only needs to answer plain HTTP.
+      # The running telegram/autobooking process keeps this port alive via
+      # google_calendar.serve_callback_forever().
       - "8010:8010"
     environment:
       - TZ=UTC

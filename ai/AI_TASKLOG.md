@@ -4,9 +4,39 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 13-11-2026 19:52:03 | [T19: setupgoogle defaults, /status Google test, stop retrying booked days](#task-t19-setupgoogle-defaults-status-google-test-stop-retrying-booked-days) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 35m | none |
 | 13-11-2026 19:21:45 | [T18: Make the Google OAuth callback endpoint work (fix the 502)](#task-t18-make-the-google-oauth-callback-endpoint-work-fix-the-502) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 6/6 | 40m | none |
 | 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m | none (live proof awaits Google re-auth) |
 | 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 12m | none |
+
+## Task T19: setupgoogle defaults, /status Google test, stop retrying booked days
+
+- **Status**: done
+- **Type**: feat
+- **Created**: 13-11-2026 19:52:03
+- **Last Updated**: 13-11-2026 19:55:00
+- **Time Spent**: 35m
+- **Branch**: `main` (committed directly)
+- **Commit(s)**: [6cd1402](https://github.com/HectorBravo/padel_booking_alrayyana/commit/6cd1402) (`feat(bot)` three UX/logic changes)
+- **Blockers**: none
+- **Findings & Notes**: Three user-reported issues fixed in one commit.
+
+### Subtasks / Plan
+
+- [x] Issue 1 — `/setupgoogle` offers existing email/calendar as defaults when Google already enabled; re-setup skips client_id/secret (already saved) and goes straight to authorize. Empty reply keeps current value, text overrides.
+- [x] Issue 2 — `/status` also runs `google_calendar.test_connection(cfg)` (lightweight Calendar list + token exchange) when integration enabled; reports OK or "connection broken -> /setupgoogle". Added `test_connection -> (ok, detail)` (never raises/exits).
+- [x] Issue 3 — autobook no longer floods "refreshing in 2 min" for already-booked/away-from-open days. Added `_near_window_open(cfg, date)` band gate + early returns in `run_booking_race`: open+already-booked -> outcome `already_booked` (return immediately); open+no-free-slot or not-opened but AWAY from booking_open_hour (and wait_for_open=True) -> return now; near-open keeps the bounded refresh to absorb server out-of-sync. Callers (`book_day`, `cmd_autobook`) handle new `already_booked` outcome.
+
+### Full Context Notes for AI Agents
+
+> Purpose: Recovery for the three UX/logic changes (commit 6cd1402).
+
+- Issue 1 (padel_telegram.py): `_on_setupgoogle` checks `self.cfg["google_calendar"].enabled` + saved email/calendar; if present sends a 2-step re-setup ("already configured", reply empty=keep, text=override) and pre-fills calendar via `_gcal_prefill_calendar`. `_on_gcal_setup` reads `reuse = bool(data.get("_reuse"))`; on the `gcal_calendar` step, if reuse AND client_id/secret present -> jumps to `_gcal_start_auth` (skips re-pasting credentials). Fresh 4-step flow unchanged.
+- Issue 2: new `google_calendar.test_connection(cfg) -> (ok, detail)`; disabled -> `(None,"not configured")`; else refresh token + GET calendar events (maxResults=1); HTTP!=200 -> `(False,...)`; success -> `(True,"Google Calendar reachable")`. Imported into padel_telegram. `_on_status` appends the Google line only when `gc.enabled`.
+- Issue 3 (padel_booking.py): new module fn `_near_window_open(cfg, target_date)` — open moment = today's `booking_open_hour` (default 0), +1 day if target is a future date; near-open iff `0 <= elapsed_min <= booking_retry_band_minutes` (default 30). In `run_booking_race` "nothing bookable yet" branch: if `ever_opened` and (`is_day_booked(target_date)` or `already_booked_successfully`) -> return outcome `"already_booked"`; the band-tightening early-returns only apply when `wait_for_open=True` (standalone CLI), so scheduler/tests passing `wait_for_open=False` keep old bounded-wait. New outcomes handled in `book_day()` (~2646, returns True + notify "already booked") and `cmd_autobook()` (~2439, prints + return).
+- Why band only when wait_for_open=True: T9's failing scenarios all pass `wait_for_open=False` (simulate server out-of-sync near open, expect waiting). The band is a production tightening for the standalone one-shot; keeping it off in scheduler mode preserves the "keeps trying an unopened day" contract.
+- Verification: ai/verify_t9_behaviors.py = ALL PASS (15 checks), ai/verify_t17_otp_capture.py = 18/18, plus a temp check of `_near_window_open` True/False and `test_connection` disabled path (removed after).
+- Current state: DONE, committed+pushed (6cd1402); CI rebuild queued. Tune `booking_retry_band_minutes` in config.json to widen/narrow the retry window around open.
 
 ## Task T18: Make the Google OAuth callback endpoint work (fix the 502)
 

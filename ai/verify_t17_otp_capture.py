@@ -153,6 +153,9 @@ for text, want in [
     ("code: 794343 is your asteco otp.", "794343"),
     ("817471   is   your   ASTECO   OTP", "817471"),
     ("no code here", ""),
+    # The real email markup (confirmed live): the code is wrapped in <b> tags.
+    ("Hi,<br/><br/><b>315813</b> is your ASTECO OTP. Valid for 60 seconds.",
+     "315813"),
 ]:
     got = go.extract_otp(text)
     ok = got == want

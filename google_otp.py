@@ -40,7 +40,13 @@ GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 # Portal OTP sender domain + body pattern ("315813 is your ASTECO OTP").
 OTP_SENDER_DOMAIN = "asteco.com"
 OTP_QUERY = f"from:{OTP_SENDER_DOMAIN}"
-OTP_BODY_RE = re.compile(r"(\d{4,8})\s+is\s+your\s+ASTECO\s+OTP", re.IGNORECASE)
+# The real email wraps the code in markup (`<b>315813</b> is your ASTECO OTP`),
+# so tags/entities/quotes between the digits and the phrase are tolerated.
+OTP_BODY_RE = re.compile(
+    r"(\d{4,8})"             # the code itself
+    r"(?:\s|</?[a-zA-Z][^>]*>|&\w+;|\"|'){0,30}"  # markup/whitespace gap
+    r"is\s+your\s+ASTECO\s+OTP",
+    re.IGNORECASE)
 
 # Polling policy: 12 attempts x 5 s ≈ one minute (the portal either emails the
 # OTP within seconds or not at all).

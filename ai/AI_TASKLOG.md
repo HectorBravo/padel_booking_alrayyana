@@ -4,10 +4,50 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 13-11-2026 19:21:45 | [T18: Make the Google OAuth callback endpoint work (fix the 502)](#task-t18-make-the-google-oauth-callback-endpoint-work-fix-the-502) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 6/6 | 40m | none |
 | 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m | none (live proof awaits Google re-auth) |
 | 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 12m | none |
 
-## Task T17: Auto-capture the OTP from Gmail instead of asking the user
+## Task T18: Make the Google OAuth callback endpoint work (fix the 502)
+
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
+- **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
+- **Created**: 13-11-2026 19:21:45
+- **Last Updated**: 13-11-2026 19:55:00
+- **Time Spent**: 40m
+- **Branch**: `main` (committed directly; [PR workflow not used for this fix])
+- **Commit(s)**: [d6908b6](https://github.com/HectorBravo/padel_booking_alrayyana/commit/d6908b6aee20216794ecc1183dfff3f1f8bbea2e) (`fix(oauth)` persistent callback)
+- **Blockers**: none
+- **Findings & Notes**:
+  - Symptom: `https://padel-booking.destr0.com/callback` returned **502 Bad Gateway** during Google consent, forcing manual code-paste.
+  - Topology (confirmed): nginx on Windows host `huevo.lan` terminates TLS for `padel-booking.destr0.com` and `proxy_pass http://ububu.lan:8010`. The bot runs in docker compose on the **Linux** server `ububu.lan` (`~/repos/dockers/padel-booking/docker-compose.yml`, container `padel-booking-bot`).
+  - **Root cause**: the deployed compose had **no `ports:` section at all** → port 8010 was never exposed, nothing listened there (curl `code=000`), so nginx returned 502. The repo's earlier `"443:8010/tcp"` line is invalid TCP mapping and the certbot/HTTPS-in-container path was obsolete (nginx already terminates TLS).
+  - **Fix**: (1) compose now maps `ports: ["8010:8010"]`; (2) `google_calendar.serve_callback_forever()` keeps port 8010 answering `/callback` for the whole `telegram`/autobooking process; (3) `start_callback_server` simplified to plain HTTP (dropped HTTPS/cert_dir); (4) `run_google_auth` reuses the persistent listener by polling `oauth_callback.json`, else one-shot; (5) removed obsolete certbot install from Dockerfile + entrypoint.sh block; (6) gitignored `oauth_callback.json`.
+  - **Live proof**: pushed → GitHub Action rebuilt image (`hectorbravo/padel_booking_alrayyana` run 43451544076 success, 51s) → redeployed on ububu.lan via `docker compose up` (pull_policy always) → port 8010 LISTEN confirmed; container `/callback?code=PING` = 200; **public** `https://padel-booking.destr0.com/callback?code=PROBE_FINAL` = **200 "Authorized!"** page. Root `/` correctly 404.
+
+### Subtasks / Plan
+
+- [x] Diagnose: read nginx conf (`sites-available/padel-booking.destr0.com.conf`) + connect to ububu.lan (paramiko) — found no `ports:` in deployed compose, nothing on 8010.
+- [x] Add persistent callback server (`serve_callback_forever`) + port-in-use detection in google_calendar.py.
+- [x] Rewrite `run_google_auth` to poll the handoff file when a listener is already up; one-shot otherwise.
+- [x] Wire `cmd_telegram` (the container's long-running entry) to start the callback server.
+- [x] Fix compose ports + remove obsolete certbot path (Dockerfile, entrypoint.sh); gitignore `oauth_callback.json`.
+- [x] Deploy: commit/push → CI rebuilds image → `docker compose up` on ububu.lan → verify public `/callback` = 200.
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: Self-contained recovery for the OAuth-callback fix.
+
+- **Topology**: Windows host `huevo.lan` runs nginx (`D:\Repos\configs\nginx`, real running conf likely under its own root; user-facing files in `sites-available/` + `sites-enabled-huevo/`). nginx block: `location / { proxy_pass http://ububu.lan:8010; ... X-Forwarded-Proto https }`. TLS certs `certs/fullchain.destr0.com.pem` exist and domain resolves.
+- **Linux server** `ububu.lan`: user `hbravo`, in docker group, Ubuntu 24.04 (kernel 6.8). Compose at `/home/hbravo/repos/dockers/padel-booking/docker-compose.yml`. Container `padel-booking-bot`, image `hecbr/padel-booking-alrayyana:latest`, `pull_policy: always`, runs `telegram` (CMD) via entrypoint.sh.
+- **Access from Windows**: no sshpass; used Python **paramiko** (`set_missing_host_key_policy(AutoAddPolicy())`, `connect(host, username, password, look_for_keys=False, allow_agent=False)`). Password auth only (no key). This is the reliable non-interactive path here.
+- **Docker on ububu.lan is OLD**: `docker ps --format '{{.Name}}'` fails ("can't evaluate field Name"); use plain `docker ps -a | grep`. `ss -ltnp` works; container has NO curl (use python urllib inside).
+- **Why 502 not connection-refused-to-browser**: nginx upstream unreachable → nginx renders its own 502 page.
+- **Key functions** (google_calendar.py): `start_callback_server(port)` plain HTTP one-shot; `serve_callback_forever(port=8010)` daemon-thread loop writing code to `OAUTH_CALLBACK_FILE` (= HERE/`oauth_callback.json`), guarded by module flag `CALLBACK_SERVER_RUNNING`; `_callback_port_in_use(port)` socket-probe. `run_google_auth`: clears stale file, picks persistent (poll `_wait_for_file`) vs one-shot.
+- **padel_booking.py**: `cmd_telegram` calls `from google_calendar import serve_callback_forever; serve_callback_forever()` before `PadelBot(cfg).run()`. Container CMD is `telegram`, so that's the only resident process in production (autobook runs as its thread).
+- **CI**: `.github/workflows/docker-publish.yml` builds+pushes on push to main. Watch via `gh run list --limit 1`. Takes ~50s.
+- **What did NOT work / was wrong**: certbot-inside-container + `443:8010/tcp` (invalid TCP mapping) + HTTPS-in-container (`HTTPSServer` not in 3.13). All removed. nginx terminates TLS so the bot only needs plain HTTP on 8010.
+- **Current state**: DONE & live-proven public 200. If it regresses, first check `docker inspect padel-booking-bot | grep 8010` (port mapping) and `ss -ltnp|grep :8010`, then that the running image has `serve_callback_forever` (`docker exec ... grep -c`).
 
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>

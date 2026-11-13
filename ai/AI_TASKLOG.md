@@ -4,7 +4,46 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 0/9 | 0m | none |
 | 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 12m | none |
+
+### Full Context Notes for AI Agents (T17)
+
+- **Repo**: `D:\Repos\padel_booking_alrayyana`, remote `git@github.com:HectorBravo/padel_booking_alrayyana.git`, base `main` HEAD `b015bac`. Windows/PowerShell, Python 3.13.11. User email `hbravo@cuic.net`.
+- **Requirement (user)**: when the Google integration is configured, never ask the user for the OTP — read it from Gmail right after `login_start`: poll every **5 s**, max **12 retries** (≈60 s), messages **from a sender in the `asteco.com` domain**, body containing `<digits> is your ASTECO OTP`. Fall back to asking the user only when Google is not configured or capture fails.
+- **Live config state**: `config.json` → `google_calendar = {enabled: true, email: hectorbravogarcia@gmail.com, calendar: Social, client_id/secret/refresh_token set, timezone: Asia/Dubai}`. Portal login email is also `hectorbravogarcia@gmail.com`.
+- **BLOCKER FOUND (pre-existing, not caused by this task)**: the stored refresh token is rejected by Google — `POST https://oauth2.googleapis.com/token` returns **400 `invalid_grant` / "Bad Request"** both with no scope and with `gmail.readonly`. This means `google-test` / calendar sync are also broken right now. Re-auth is required: `python padel_booking.py google-auth` (or `/setupgoogle`), which must now request the Gmail scope too so one consent grants Calendar + Gmail read.
+- **OTP flow today**: `login_start(cfg)` (`padel_booking.py:371`) posts credentials, parses hidden OTP fields, stashes `pending_login.json`, prints "OTP sent to your email". `login_finish(cfg, otp)` (`:415`) verifies. CLI `cmd_login_finish` (`:478`) requires the OTP as argv. Telegram `_on_login` (`padel_telegram.py:468`) sets `pending[chat]={"action":"otp"}` and waits for a text message; `_relogin` (`:1136`) does the same for background re-login with a 900 s wait.
+- **Design**: new module `google_otp.py` (Gmail read via the existing OAuth client + `curl_cffi`, no new deps). `capture_otp(cfg)` → 5 s × 12 poll loop, newest-first Gmail search (`from:asteco.com`), extracts the code with a case-insensitive regex on `<digits> is your ASTECO OTP`; ignores codes already tried (dedupe via `last_otp.txt`). Returns `(otp, error)`.
+- **OAuth**: add `GMAIL_SCOPE = https://www.googleapis.com/auth/gmail.readonly` and request `SCOPE + " " + GMAIL_SCOPE` in the auth URL and in the refresh call, so a single consent covers Calendar + Gmail. Refresh must keep sending the scope explicitly (Google returns only the granted subset).
+- **CLI**: `login-finish` with no argument → auto-capture when Google is enabled; `login-start` also auto-completes when Google is configured (so `login-start && slots` works unattended), and falls back to printing the manual instructions.
+- **Telegram**: `_on_login` / `_relogin` try Gmail capture first (notify "reading your inbox"), keep the manual OTP path as fallback.
+- **Test harness**: `ai/verify_t17_otp_capture.py` — patches the token/Gmail HTTP calls with synthetic OTP messages and asserts parse/filter/retry/fallback behaviour; plus `ai/verify_t9_behaviors.py` regression run.
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+- [ ] (13-11-2026 13:40:00) The stored Google refresh token in `config.json` is rejected by Google (400 `invalid_grant`) — Gmail capture cannot be proven live until you re-run `python padel_booking.py google-auth` (or `/setupgoogle`). Shall I proceed on that basis?
+
+**Confirmed (user provided):**
+
+- None yet.
+
+### Subtasks / Plan
+
+- [ ] Create `google_otp.py`: token refresh with Calendar+Gmail scopes, Gmail search for `from:asteco.com`, OTP regex `<digits> is your ASTECO OTP`, 5 s × 12 retry loop, dedupe of already-used codes
+- [ ] Add `GMAIL_SCOPE` to `google_calendar.py` auth URL + token refresh so one consent covers Calendar + Gmail read
+- [ ] Wire CLI: `login-start` auto-completes when Google is enabled; `login-finish` without an argument auto-captures
+- [ ] Wire Telegram `_on_login` and `_relogin` to capture from Gmail first, manual OTP reply as fallback
+- [ ] Update `config.sample.json` + README/TELEGRAM docs for the new behaviour
+- [ ] Write `ai/verify_t17_otp_capture.py` (synthetic Gmail responses) and make it pass
+- [ ] Run existing `ai/verify_t9_behaviors.py` regression
+- [ ] Live proof against the real mailbox (blocked by the invalid refresh token — needs re-auth)
+- [ ] Commit + push branch, open PR
+
+---
+
 | 11-11-2026 02:50:02 | [T15: Merge every AI branch into main and delete them](#task-t15-merge-every-ai-branch-into-main-and-delete-them) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span> | 5/5 | 4m | none |
 
 | 11-11-2026 01:14:00 | [T14: Stop POSTing unopened dates (fail-closed) and keep retrying them](#task-t14-stop-posting-unopened-dates-fail-closed-and-keep-retrying-them) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 6/6 | 11m | none |

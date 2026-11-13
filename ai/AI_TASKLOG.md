@@ -4,7 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 0/9 | 0m | none |
+| 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 7/9 | 14m | none |
 | 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 12m | none |
 
 ### Full Context Notes for AI Agents (T17)
@@ -32,15 +32,25 @@
 
 ### Subtasks / Plan
 
-- [ ] Create `google_otp.py`: token refresh with Calendar+Gmail scopes, Gmail search for `from:asteco.com`, OTP regex `<digits> is your ASTECO OTP`, 5 s × 12 retry loop, dedupe of already-used codes
-- [ ] Add `GMAIL_SCOPE` to `google_calendar.py` auth URL + token refresh so one consent covers Calendar + Gmail read
-- [ ] Wire CLI: `login-start` auto-completes when Google is enabled; `login-finish` without an argument auto-captures
-- [ ] Wire Telegram `_on_login` and `_relogin` to capture from Gmail first, manual OTP reply as fallback
-- [ ] Update `config.sample.json` + README/TELEGRAM docs for the new behaviour
-- [ ] Write `ai/verify_t17_otp_capture.py` (synthetic Gmail responses) and make it pass
-- [ ] Run existing `ai/verify_t9_behaviors.py` regression
-- [ ] Live proof against the real mailbox (blocked by the invalid refresh token — needs re-auth)
-- [ ] Commit + push branch, open PR
+- [x] Create `google_otp.py`: token refresh with Calendar+Gmail scopes, Gmail search for `from:asteco.com`, OTP regex `<digits> is your ASTECO OTP`, 5 s × 12 retry loop, dedupe of already-used codes
+- [x] Add `GMAIL_SCOPE` to `google_calendar.py` auth URL + token refresh so one consent covers Calendar + Gmail read (`AUTH_SCOPE`)
+- [x] Wire CLI: `login-start` auto-completes when Google is enabled; `login-finish` without an argument auto-captures (`_auto_login`)
+- [x] Wire Telegram `_on_login` (new `_otp_from_gmail`) and `_relogin` to capture from Gmail first, manual OTP reply as fallback
+- [x] Update docs + packaging: README, TELEGRAM.md, `.gitignore`/`.dockerignore` (`last_otp.txt`), `Dockerfile` + `entrypoint.sh` (ship `google_otp.py`)
+- [x] Write `ai/verify_t17_otp_capture.py` (synthetic Gmail responses) and make it pass → **17/17 checks**
+- [x] Run existing `ai/verify_t9_behaviors.py` regression → **ALL PASS**
+- [ ] Live proof against the real mailbox (**blocked**: the stored refresh token returns 400 `invalid_grant`; needs one re-auth with the new Gmail scope)
+- [x] Commit + push branch, open PR → [`feat/ai-auto-capture-otp-from-gmail`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/feat/ai-auto-capture-otp-from-gmail), [PR #12](https://github.com/HectorBravo/padel_booking_alrayyana/pull/12)
+
+### Findings & Notes (added during implementation)
+
+- New module **`google_otp.py`** (~10.5 KB): `capture_otp(cfg, log, skip)` → `(otp, error)`. Polls Gmail `from:asteco.com` (`maxResults=10`, newest first), requires the sender domain **and** the body phrase `<digits> is your ASTECO OTP` (case-insensitive, `\s+` tolerant), 5 s between checks, 12 attempts max. Never raises — every caller can fall back to asking a human.
+- Stale-code guard: the last code handed out is stored in `last_otp.txt` (gitignored/dockerignored, chmod 600) and skipped on later logins, so an old inbox OTP is never re-submitted; state `stale` keeps polling instead of wasting the fresh login.
+- Body decoding handles base64url (unpadded), nested `multipart/alternative` parts and both text/html + text/plain.
+- One consent now covers both integrations: `AUTH_SCOPE = calendar + gmail.readonly`, used by `generate_auth_url` **and** `run_google_auth`; the token refresh in `google_otp` sends the same scope explicitly so a re-authorised token is upgraded.
+- Live behaviour with the current (dead) token, as designed — fails fast with an actionable message instead of burning the 12 retries:
+  `-> Gmail: Google token refresh failed (400): {"error": "invalid_grant", ...}. Re-run 'google-auth' (or /setupgoogle).`
+- Verified `generate_auth_url` emits both scopes (`both scopes in url: True`).
 
 ---
 

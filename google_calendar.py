@@ -22,6 +22,8 @@ from urllib.parse import urlparse, parse_qs, urlencode
 
 from curl_cffi import requests
 
+from google_otp import GMAIL_SCOPE
+
 HERE = Path(__file__).resolve().parent
 EVENTS_FILE = HERE / "google_events.json"
 CONFIG_FILE = HERE / "config.json"
@@ -30,6 +32,10 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 SCOPE = "https://www.googleapis.com/auth/calendar"
+# The consent we ask for: Calendar (read/write) + Gmail read-only.  The Gmail
+# scope lets `google_otp.capture_otp` read the portal OTP straight out of the
+# inbox instead of asking a human (see google_otp.py).
+AUTH_SCOPE = f"{SCOPE} {GMAIL_SCOPE}"
 
 
 class GoogleCalendarError(Exception):
@@ -259,7 +265,7 @@ def generate_auth_url(client_id: str, redirect_uri: str) -> str:
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": SCOPE,
+        "scope": AUTH_SCOPE,
         "access_type": "offline",
         "prompt": "consent",
     }
@@ -416,7 +422,7 @@ def run_google_auth(cfg: dict, client_id: str = "",
     redirect_uri = "https://padel-booking.destr0.com/callback"
     auth_params = {
         "client_id": cid, "redirect_uri": redirect_uri,
-        "response_type": "code", "scope": SCOPE,
+        "response_type": "code", "scope": AUTH_SCOPE,
         "access_type": "offline", "prompt": "consent",
     }
     auth_url = f"{AUTH_URL}?{urlencode(auth_params)}"

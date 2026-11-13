@@ -58,6 +58,7 @@ booked.json
 telegram_state.json
 pending_login.json
 google_events.json
+last_otp.txt
 
 # Debug artifacts
 booking_page.html

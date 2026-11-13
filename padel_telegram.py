@@ -43,6 +43,7 @@ from google_calendar import (
     run_google_auth, run_google_test, run_google_list_calendars,
     start_callback_server, generate_auth_url, exchange_code_for_tokens,
 )
+from google_otp import capture_otp, google_configured
 
 HERE = Path(__file__).resolve().parent
 BOT_API = "https://api.telegram.org"
@@ -284,7 +285,7 @@ class PadelBot:
             {"command": "prefs",
              "description": "Set days & preferred slots for autobooking"},
             {"command": "setupgoogle",
-             "description": "Configure Google Calendar sync"},
+             "description": "Configure Google sync (calendar + OTP reading)"},
         ]
         try:
             self.api.set_my_commands(commands)
@@ -465,12 +466,49 @@ class PadelBot:
         else:
             self._send(chat_id, f"Unknown command {cmd}\n\n/help for the list.")
 
+    def _otp_from_gmail(self, chat_id: int) -> bool:
+        """Try to finish a pending login with the OTP read from Gmail.
+
+        Only attempted when the Google integration is configured; the manual
+        "reply with the 6-digit code" path stays as the fallback.  Returns
+        True when the login finished.
+        """
+        if not google_configured(self.cfg):
+            return False
+        self._send(chat_id, "📥 Google integration is on — reading the OTP "
+                            "from your Gmail (up to a minute), so you don't "
+                            "need to type it.")
+
+        def _gmail_log(msg: str) -> None:
+            _log(f"[otp-gmail] {msg.strip()}")
+
+        otp, error = capture_otp(self.cfg, log=_gmail_log)
+        if not otp:
+            self._send(chat_id, f"⚠️ I could not read the OTP from Gmail: "
+                                f"{error}\n\nReply here with the 6-digit code "
+                                f"from your email (or /login to restart).")
+            return False
+        try:
+            login_finish(self.cfg, otp)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self._send(chat_id, f"❌ Login failed with the captured OTP "
+                                f"({otp}): {e}\n\nSend /login to try again.")
+            return False
+        self._send(chat_id, f"✅ Login successful — session saved "
+                            f"(OTP {otp} read from Gmail).")
+        return True
+
     def _on_login(self, chat_id: int) -> None:
         """Start the two-step login, then wait for the OTP code here."""
         try:
             login_start(self.cfg)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self._send(chat_id, f"❌ Could not start login: {e}")
+            return
+        # With Google configured the OTP never reaches the user: grab it from
+        # Gmail ourselves.  Only fall back to waiting for a typed code when
+        # that is not possible.
+        if self._otp_from_gmail(chat_id):
             return
         self.pending[chat_id] = {"action": "otp"}
         self._send(chat_id, "📧 OTP sent to your email.\n"
@@ -665,7 +703,8 @@ class PadelBot:
     def _on_help(self, chat_id: int) -> None:
         self._send(chat_id,
                    "Padel booking bot — commands:\n\n"
-                   "/login — start a fresh OTP login\n"
+                   "/login — start a fresh OTP login (with Google set up, the "
+                   "OTP is read from Gmail by itself)\n"
                    "/status — check whether the saved session is valid\n"
                    "/slots [date] — list free slots (or pick a date)\n"
                    "/window — show the days the portal lets you book\n"
@@ -1146,6 +1185,26 @@ class PadelBot:
         except Exception as e:  # pylint: disable=broad-exception-caught
             self._notify(f"❌ Could not start re-login: {e}")
             return False
+        # Google configured → read the OTP from Gmail ourselves; the session is
+        # restored without bothering anyone.  Otherwise ask the chats to reply.
+        if google_configured(self.cfg):
+            self._notify("⚠️ Session expired — I triggered a fresh login.\n"
+                         "📥 Reading the OTP from your Gmail (up to a minute).")
+            otp, error = capture_otp(self.cfg,
+                                     log=lambda m: _log(f"[otp-gmail] "
+                                                        f"{m.strip()}"))
+            if otp:
+                try:
+                    login_finish(self.cfg, otp)
+                    self._notify("✅ Session restored from Gmail — autobooking "
+                                 "is healthy again.")
+                    return True
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    self._notify(f"❌ Re-login failed with the captured OTP "
+                                 f"({otp}): {e}\nFalling back to a manual OTP.")
+            else:
+                self._notify(f"⚠️ Could not read the OTP from Gmail: {error}\n"
+                             f"Falling back to a manual OTP.")
         event = threading.Event()
         state = {"ok": False, "error": None}
         for chat in self.chat_ids:

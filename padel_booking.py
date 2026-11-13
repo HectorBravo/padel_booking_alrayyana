@@ -81,6 +81,7 @@ from pathlib import Path
 from curl_cffi import requests  # browser TLS fingerprint (impersonate) to pass Akamai
 from bs4 import BeautifulSoup
 from google_calendar import sync_booking, sync_cancellation
+from google_otp import capture_otp, google_configured
 
 HERE = Path(__file__).resolve().parent
 BASE_URL = "https://myportal.asteco.com"
@@ -352,6 +353,30 @@ def _hidden_field(soup: BeautifulSoup, name: str) -> str:
 PENDING_FILE = HERE / "pending_login.json"
 
 
+def _auto_login(cfg: dict) -> bool:
+    """Finish a pending login with the OTP read from Gmail (Google only).
+
+    Returns True when the session was established.  Never raises and never
+    blocks longer than google_otp's own budget (~1 minute): when the Google
+    integration is absent, or no OTP email shows up, it prints why and leaves
+    the caller to fall back to the manual `login-finish <OTP>` flow.
+    """
+    if not google_configured(cfg):
+        return False
+    print("  -> Google integration is on: reading the OTP from Gmail "
+          "(no need to type it)...")
+    otp, error = capture_otp(cfg)
+    if not otp:
+        print(f"  -> Could not capture the OTP automatically: {error}")
+        return False
+    try:
+        login_finish(cfg, otp)
+        return True
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        print(f"  -> Login with the captured OTP failed: {e}")
+        return False
+
+
 def _save_cookies(s: requests.Session) -> list:
     return [
         {"name": c.name, "value": c.value, "domain": c.domain, "path": c.path}
@@ -409,6 +434,8 @@ def login_start(cfg: dict) -> None:
     PENDING_FILE.chmod(0o600)
 
     print("  -> OTP sent to your email. Check your inbox.")
+    if _auto_login(cfg):
+        return
     print("  -> When ready, run: python3 padel_booking.py login-finish <OTP>")
 
 
@@ -476,9 +503,18 @@ def cmd_login_start(cfg: dict) -> None:
 
 
 def cmd_login_finish(cfg: dict, args: list) -> None:
-    """CLI: finish the two-step login with the OTP from the email."""
+    """CLI: finish the two-step login.
+
+    With an OTP argument it behaves as before.  Without one — and only when
+    the Google integration is configured — the OTP is read from Gmail, so
+    `login-finish` alone is enough.
+    """
     if not args:
-        sys.exit("ERROR: provide the OTP, e.g. login-finish 123456")
+        if _auto_login(cfg):
+            return
+        sys.exit("ERROR: provide the OTP, e.g. login-finish 123456 "
+                 "(or enable the Google integration to have it read from "
+                 "Gmail automatically)")
     login_finish(cfg, args[0].strip())
 
 

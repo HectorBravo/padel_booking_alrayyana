@@ -100,7 +100,7 @@ terminal. Open your bot in Telegram and send `/start`.
 |---|---|
 | `/start` | Show the command list (same as `/help`) |
 | `/help` | Show the command list |
-| `/login` | Start a fresh OTP login — the bot emails the OTP, you reply with the code in chat |
+| `/login` | Start a fresh OTP login — with the Google integration set up the bot reads the OTP from your Gmail itself; otherwise it emails the OTP and you reply with the code in chat |
 | `/status` | Check whether the saved portal session is still valid |
 | `/slots [date]` | List free slots for a date (or tap a date button) |
 | `/window` | Show the 7-day rolling window **and** which of those days the portal has opened (its "Check in date" picker) |
@@ -127,8 +127,13 @@ Dates accept `YYYY-MM-DD`, `DD/MM/YYYY` or `DD-MM-YYYY`.
 
 **The `/login` OTP flow, step by step:**
 
+*With the Google integration configured (`/setupgoogle`) there is nothing to
+type:* the bot reads the code out of your Gmail inbox itself (mail from
+`asteco.com` containing "`<code> is your ASTECO OTP`"), checking every 5 s for
+up to a minute, and logs in. Only if that fails does it ask you for the code.
+
 1. Send `/login` — the bot submits your credentials to the portal and replies
-   "📧 OTP sent to your email."
+   "📧 OTP sent to your email." (or "📥 … reading the OTP from your Gmail").
 2. Check your email (and the spam folder), copy the 6-digit code.
 3. **Reply with the code in the chat** — that's it. The bot verifies it, saves
    the session, and replies "✅ Login successful — session saved."

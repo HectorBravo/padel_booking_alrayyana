@@ -8,6 +8,13 @@ Automates booking the Al Rayyana community padel court on the Asteco portal
   1. `login-start` submits your credentials (obfuscated exactly like the
      portal's JS) and triggers the OTP email.
   2. `login-finish <OTP>` verifies the OTP and stores the session.
+  - **When the Google integration is configured you never type an OTP**: right
+    after phase 1 the tool reads the code straight out of your Gmail inbox — it
+    looks for mail from the `asteco.com` domain whose body contains
+    `<code> is your ASTECO OTP`, checking every 5 s for up to a minute (12
+    tries). If the mail does not arrive in that time the portal did not send
+    one, and it falls back to asking you. So `login-finish` alone (no argument)
+    is enough, and the Telegram bot / autobooking re-login are fully automatic.
 - The authenticated **session cookie is persisted** to `session.json`, so you
   only enter an OTP once per session lifetime. Every later command reuses it.
 - **Slots** are fetched from the portal's `ajaxctrl/getAmenityBookingSlot`
@@ -53,6 +60,9 @@ Automates booking the Al Rayyana community padel court on the Asteco portal
 | `session.json`     | Persisted login session (cookies)                    | `600`     |
 | `pending_login.json`| Temporary state between login-start and login-finish | `600`     |
 | `padel_telegram.py` | Telegram bot API client + interactive bot (login/OTP, book, autobooking) | —         |
+| `google_calendar.py` | Google Calendar sync (events for bookings) + the OAuth flow | —      |
+| `google_otp.py`   | Reads the portal OTP out of Gmail so logins need no typing | —      |
+| `last_otp.txt`    | Last OTP already used, so a stale inbox code is never re-submitted | `600` |
 | `TELEGRAM.md` | Step-by-step Telegram bot setup guide | —         |
 
 `config.json`, `session.json` and `pending_login.json` are **never** meant to
@@ -138,6 +148,10 @@ Windows.
 # 1) Authenticate (only needed once per session)
 python3 padel_booking.py login-start          # sends the OTP to your email
 python3 padel_booking.py login-finish 123456  # enter the OTP you received
+#    With the Google integration configured, skip the number entirely — the
+#    OTP is read from Gmail by itself:
+python3 padel_booking.py login-start          # logs in on its own (~5-60 s)
+python3 padel_booking.py login-finish         # ...or finish it later
 
 # 2) Check the session is still valid
 python3 padel_booking.py login-status

@@ -4,10 +4,40 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 7/9 | 14m | none |
+| 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m | none (live proof awaits Google re-auth) |
 | 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 12m | none |
 
-### Full Context Notes for AI Agents (T17)
+## Task T17: Auto-capture the OTP from Gmail instead of asking the user
+
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
+- **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
+- **Created**: 13-11-2026 13:34:10
+- **Last Updated**: 13-11-2026 13:50:00
+- **Time Spent**: 18m
+- **Branch**: [`feat/ai-auto-capture-otp-from-gmail`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/feat/ai-auto-capture-otp-from-gmail) (merged into `main` via [PR #12](https://github.com/HectorBravo/padel_booking_alrayyana/pull/12))
+- **Commit(s)**: [f9eb1d1](https://github.com/HectorBravo/padel_booking_alrayyana/commit/f9eb1d1c6b7c4dd462e24475b324e108f8091616) (`docs(ai)` log before push), [45138de](https://github.com/HectorBravo/padel_booking_alrayyana/commit/45138dec9f652079a00b0763b80061fe24e1432d) (feat — Gmail OTP capture), [ab69b07](https://github.com/HectorBravo/padel_booking_alrayyana/commit/ab69b07cf071841e9977c889cc1e83a96a0ebf9a) (`docs(ai)` log for push), merge [eb60198](https://github.com/HectorBravo/padel_booking_alrayyana/commit/eb60198334da47c19f4bb7c869a65f3e14b694e3)
+- **Blockers**: none (one user action left: re-run `google-auth`, see User Confirmations)
+- **Findings & Notes**:
+  - New module **`google_otp.py`** (~10.5 KB): `capture_otp(cfg, log, skip)` → `(otp, error)`. Polls Gmail `from:asteco.com` (`maxResults=10`, newest first), requires the sender domain **and** the body phrase `<digits> is your ASTECO OTP` (case-insensitive, `\s+` tolerant), **5 s between checks, 12 attempts max** (~1 minute). Never raises — every caller can degrade to the manual flow.
+  - Wired into all four entry points: CLI `login-start` (auto-completes), CLI `login-finish` with no argument (`_auto_login`), Telegram `/login` (new `_otp_from_gmail`) and autobooking `_relogin`. The manual "reply with the code" path stays as fallback everywhere.
+  - Stale-code guard: the last code handed out is stored in `last_otp.txt` (gitignored/dockerignored, chmod 600) and skipped on later logins, so an old inbox OTP is never re-submitted; that state keeps polling instead of wasting the fresh login.
+  - Body decoding handles base64url (unpadded), nested `multipart/alternative`, and both text/html + text/plain.
+  - One consent now covers both integrations: `AUTH_SCOPE = calendar + gmail.readonly` used by `generate_auth_url` **and** `run_google_auth`; `google_otp` refreshes with that scope explicitly so a re-authorised token is upgraded. Verified `generate_auth_url` emits both scopes (`both scopes in url: True`).
+  - Tests: new `ai/verify_t17_otp_capture.py` → **17/17 checks**; existing `ai/verify_t9_behaviors.py` → **ALL PASS**; `py_compile` clean for all modules.
+  - **Pre-existing issue found (not caused by this task)**: the refresh token in `config.json` is rejected by Google — `POST oauth2.googleapis.com/token` → **400 `invalid_grant`** both with no scope and with `gmail.readonly`. This also breaks the existing Calendar sync (`google-test`). Until re-auth, the new code fails fast with `Re-run 'google-auth' (or /setupgoogle).` and falls back to the manual OTP path — confirmed live.
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+- None yet.
+
+**Confirmed (user provided):**
+
+- (13-11-2026 13:44:00) "Merge vs live proof first?" → "Merge PR #12 now, then help me run the google-auth re-authorisation"
+- (13-11-2026 13:40:00) "The stored Google refresh token is rejected (400 `invalid_grant`) — Gmail capture cannot be proven live until you re-run `google-auth`. Proceed on that basis?" → answered by the merge decision above (proceed; re-auth to follow)
+
+### Full Context Notes for AI Agents
 
 - **Repo**: `D:\Repos\padel_booking_alrayyana`, remote `git@github.com:HectorBravo/padel_booking_alrayyana.git`, base `main` HEAD `b015bac`. Windows/PowerShell, Python 3.13.11. User email `hbravo@cuic.net`.
 - **Requirement (user)**: when the Google integration is configured, never ask the user for the OTP — read it from Gmail right after `login_start`: poll every **5 s**, max **12 retries** (≈60 s), messages **from a sender in the `asteco.com` domain**, body containing `<digits> is your ASTECO OTP`. Fall back to asking the user only when Google is not configured or capture fails.
@@ -19,16 +49,7 @@
 - **CLI**: `login-finish` with no argument → auto-capture when Google is enabled; `login-start` also auto-completes when Google is configured (so `login-start && slots` works unattended), and falls back to printing the manual instructions.
 - **Telegram**: `_on_login` / `_relogin` try Gmail capture first (notify "reading your inbox"), keep the manual OTP path as fallback.
 - **Test harness**: `ai/verify_t17_otp_capture.py` — patches the token/Gmail HTTP calls with synthetic OTP messages and asserts parse/filter/retry/fallback behaviour; plus `ai/verify_t9_behaviors.py` regression run.
-
-### User Confirmations
-
-**Pending (awaiting user response):**
-
-- [ ] (13-11-2026 13:40:00) The stored Google refresh token in `config.json` is rejected by Google (400 `invalid_grant`) — Gmail capture cannot be proven live until you re-run `python padel_booking.py google-auth` (or `/setupgoogle`). Shall I proceed on that basis?
-
-**Confirmed (user provided):**
-
-- None yet.
+- **NEXT (user action, to prove it live)**: re-authorise Google so the token gains `gmail.readonly`. The OAuth flow needs a browser + a listener on **port 8010** at redirect URI `https://padel-booking.destr0.com/callback` (the code param can also be pasted back). Then `python padel_booking.py google-test` (Calendar works) and `python padel_booking.py login-start` should log in with no OTP typed. Verify the token covers Gmail by refreshing it and calling `GET gmail/v1/users/me/messages?q=from:asteco.com`. If Google still answers `invalid_grant`, revoke at https://myaccount.google.com/permissions and retry (the app is in OAuth *Testing* mode — the account must stay a test user).
 
 ### Subtasks / Plan
 
@@ -42,16 +63,6 @@
 - [ ] Live proof against the real mailbox (**blocked**: the stored refresh token returns 400 `invalid_grant`; needs one re-auth with the new Gmail scope)
 - [x] Commit + push branch, open PR → [`feat/ai-auto-capture-otp-from-gmail`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/feat/ai-auto-capture-otp-from-gmail), [PR #12](https://github.com/HectorBravo/padel_booking_alrayyana/pull/12)
 
-### Findings & Notes (added during implementation)
-
-- New module **`google_otp.py`** (~10.5 KB): `capture_otp(cfg, log, skip)` → `(otp, error)`. Polls Gmail `from:asteco.com` (`maxResults=10`, newest first), requires the sender domain **and** the body phrase `<digits> is your ASTECO OTP` (case-insensitive, `\s+` tolerant), 5 s between checks, 12 attempts max. Never raises — every caller can fall back to asking a human.
-- Stale-code guard: the last code handed out is stored in `last_otp.txt` (gitignored/dockerignored, chmod 600) and skipped on later logins, so an old inbox OTP is never re-submitted; state `stale` keeps polling instead of wasting the fresh login.
-- Body decoding handles base64url (unpadded), nested `multipart/alternative` parts and both text/html + text/plain.
-- One consent now covers both integrations: `AUTH_SCOPE = calendar + gmail.readonly`, used by `generate_auth_url` **and** `run_google_auth`; the token refresh in `google_otp` sends the same scope explicitly so a re-authorised token is upgraded.
-- Live behaviour with the current (dead) token, as designed — fails fast with an actionable message instead of burning the 12 retries:
-  `-> Gmail: Google token refresh failed (400): {"error": "invalid_grant", ...}. Re-run 'google-auth' (or /setupgoogle).`
-- Verified `generate_auth_url` emits both scopes (`both scopes in url: True`).
-
 ---
 
 | 11-11-2026 02:50:02 | [T15: Merge every AI branch into main and delete them](#task-t15-merge-every-ai-branch-into-main-and-delete-them) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span> | 5/5 | 4m | none |
@@ -63,7 +74,7 @@
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m | none |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
 
-> ✅ **15 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **16 completed task(s)** — [View completed tasks](#completed-tasks)
 
 ---
 
@@ -1032,6 +1043,7 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
+| 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m |
 | 11-11-2026 02:50:02 | [T15: Merge every AI branch into main and delete them](#task-t15-merge-every-ai-branch-into-main-and-delete-them) | <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span> | 5/5 | 4m |
 | 11-11-2026 01:04:22 | [T13: Treat the picker as the real window limit (7-day assumption is wrong)](#task-t13-treat-the-picker-as-the-real-window-limit-7-day-assumption-is-wrong) | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 14m |
 | 11-11-2026 00:50:01 | [T12: Telegram notice on first retry while a day is unavailable](#task-t12-telegram-notice-on-first-retry-while-a-day-is-unavailable) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/5 | 8m |

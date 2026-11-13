@@ -689,6 +689,38 @@ def run_google_test(cfg: dict) -> None:
         sys.exit(1)
 
 
+def test_connection(cfg: dict) -> tuple:
+    """Lightweight Google connectivity check for the bot's /status.
+
+    Returns (ok, detail).  When the integration is disabled it returns
+    (None, "not configured") so callers can skip the check entirely.  Otherwise
+    it fetches a fresh access token and lists up to one upcoming calendar event:
+    success proves both the refresh-token exchange AND Calendar read access are
+    alive; any failure returns (False, short reason) so /status can offer to
+    re-run setup. Never raises and never exits — safe to call from Telegram.
+    """
+    gc = GoogleCalendar(cfg)
+    if not gc.enabled:
+        return None, "not configured"
+    try:
+        from datetime import datetime, timedelta
+        token = gc._get_access_token()
+        resp = requests.get(
+            f"{CALENDAR_API}/calendars/{gc.email}/events",
+            params={"timeMin": datetime.now().isoformat(),
+                    "timeMax": (datetime.now() + timedelta(days=7)).isoformat(),
+                    "maxResults": 1, "singleEvents": "true"},
+            headers=gc._headers(), impersonate="chrome", timeout=20)
+        if resp.status_code != 200:
+            return False, f"Calendar access failed (HTTP {resp.status_code})"
+        _ = token  # token acquisition already proves the refresh token works
+        return True, "Google Calendar reachable"
+    except GoogleCalendarError as e:
+        return False, str(e)
+    except Exception as e:  # network hiccup, revoked token, etc.
+        return False, f"Google test failed: {e}"
+
+
 def run_google_list_calendars(cfg: dict) -> None:
     """List all accessible Google calendars with their IDs."""
     gc = GoogleCalendar(cfg)

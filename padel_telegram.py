@@ -42,6 +42,7 @@ from google_calendar import (
     sync_booking, sync_cancellation, get_setup_status,
     run_google_auth, run_google_test, run_google_list_calendars,
     start_callback_server, generate_auth_url, exchange_code_for_tokens,
+    test_connection,
 )
 from google_otp import capture_otp, google_configured
 
@@ -517,7 +518,27 @@ class PadelBot:
 
     # ---- Google Calendar setup flow ---------------------------------------- #
     def _on_setupgoogle(self, chat_id: int) -> None:
-        """Start the interactive Google Calendar setup flow."""
+        """Start the interactive Google Calendar setup flow.
+
+        When Google is already configured (enabled with a saved email/calendar),
+        those values are offered as defaults so re-setup is one tap instead of
+        retyping; an empty reply keeps the existing value, any text overrides it.
+        The OAuth client pair is only asked for when it is not already present.
+        """
+        gc = self.cfg.get("google_calendar", {})
+        if gc.get("enabled") and (gc.get("email") or gc.get("calendar")):
+            email = gc.get("email", "")
+            cal = gc.get("calendar", "default")
+            self.pending[chat_id] = {"action": "gcal_email",
+                                     "data": {"_reuse": True}}
+            self._send(chat_id,
+                "📅 Google Calendar Setup (already configured)\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"Step 1/2: Google email — current is {email or '(none)'}.\n"
+                "Reply empty to keep it, or type a different email.")
+            self._gcal_prefill_calendar(chat_id, email, cal)
+            return
+        # Fresh setup (nothing configured yet): full 4-step flow.
         self.pending[chat_id] = {"action": "gcal_email", "data": {}}
         self._send(chat_id,
             "📅 Google Calendar Setup\n"
@@ -525,22 +546,51 @@ class PadelBot:
             "Step 1/4: What's your Google email?\n"
             "(the account that owns the calendar)")
 
+    def _gcal_prefill_calendar(self, chat_id: int, email: str,
+                               cal: str) -> None:
+        """Queue the calendar-default prompt for a re-setup (email already offered)."""
+        self.pending[chat_id] = {"action": "gcal_calendar",
+                                 "data": {"email": email, "_reuse": True}}
+        self._send(chat_id,
+            "Step 2/2: Which calendar — current is "
+            f"'{cal}'. Reply empty to keep it, or type another name.")
+
     def _on_gcal_setup(self, chat_id: int, step: str, text: str) -> None:
         """Handle each step of the Google Calendar setup flow."""
         st = self.pending.get(chat_id, {})
         data = st.get("data", {})
+        reuse = bool(data.get("_reuse"))
         if step == "gcal_email":
-            if "@" not in text:
+            if not text.strip() and reuse:
+                # keep the existing email (already pre-filled in data)
+                pass
+            elif "@" not in text:
                 self._send(chat_id, "That doesn't look like an email. "
                                     "Try again (e.g. you@gmail.com)")
                 return
-            data["email"] = text
+            else:
+                data["email"] = text
             self.pending[chat_id] = {"action": "gcal_calendar", "data": data}
-            self._send(chat_id,
-                "Step 2/4: Which calendar should I use?\n"
-                "(e.g. 'Social', 'Work', or leave empty for default)")
+            # The calendar prompt was already sent by the re-setup prefill; only
+            # send it here for the fresh 4-step flow.
+            if not reuse:
+                self._send(chat_id,
+                    "Step 2/4: Which calendar should I use?\n"
+                    "(e.g. 'Social', 'Work', or leave empty for default)")
         elif step == "gcal_calendar":
-            data["calendar"] = text
+            if not text.strip() and reuse:
+                data.setdefault("calendar", self.cfg.get(
+                    "google_calendar", {}).get("calendar", ""))
+            else:
+                data["calendar"] = text
+            gc = self.cfg.get("google_calendar", {})
+            # Re-setup already has the OAuth client pair saved — skip straight to
+            # authorization instead of making the user paste them again.
+            if reuse and gc.get("client_id") and gc.get("client_secret"):
+                data["client_id"] = gc["client_id"]
+                data["client_secret"] = gc["client_secret"]
+                self._gcal_start_auth(chat_id, data)
+                return
             self.pending[chat_id] = {"action": "gcal_client_id", "data": data}
             self._send(chat_id,
                 "Step 3/4: Google OAuth Client ID\n"
@@ -699,6 +749,18 @@ class PadelBot:
             reset_session()
             self._send(chat_id, "❌ Not logged in (or session expired).\n"
                                 "Send /login to start a fresh login.")
+        # When the Google integration is on, also prove the connection is alive
+        # with a lightweight Calendar test so a silently-revoked token doesn't
+        # go unnoticed. Offer re-setup if it broke.
+        gc = self.cfg.get("google_calendar", {})
+        if gc.get("enabled"):
+            gok, gdetail = test_connection(self.cfg)
+            if gok:
+                self._send(chat_id, f"📅 Google: {gdetail} ✅")
+            else:
+                self._send(chat_id,
+                    f"⚠️ Google connection broken: {gdetail}\n"
+                    "Send /setupgoogle to re-authorise it.")
 
     def _on_help(self, chat_id: int) -> None:
         self._send(chat_id,

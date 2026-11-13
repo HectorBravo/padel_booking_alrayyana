@@ -2170,6 +2170,35 @@ def ts_prefix() -> str:
     return datetime.now().strftime("[%d/%m/%Y %H:%M:%S]")
 
 
+def _near_window_open(cfg: dict, target_date) -> bool:
+    """True when ``now`` is within a short band around the moment this day's
+    slots open.
+
+    The portal opens a rolling-window day at ``booking_open_hour`` (0 = midnight,
+    the window boundary). A program started right then — or a server whose clock
+    lags the real open — needs a few refreshes to catch the freshly-opened slots,
+    so retrying is worthwhile only inside a band of ``booking_retry_band_minutes``
+    (default 30 min) after that hour. Away from it, a day that is not open yet
+    (or whose preferred slots are taken) will stay that way until the next window
+    slides it in, so the caller returns immediately and lets the scheduler retry
+    at the next open moment instead of waiting for hours.
+    """
+    open_hour = int(cfg.get("booking_open_hour", 0))
+    band_min = int(cfg.get("booking_retry_band_minutes", 30))
+    now = datetime.now()
+    # The day opens at open_hour on its own calendar date; if the target is today
+    # that moment already passed at open_hour, so measure from there. For a future
+    # day the open moment is that day's open_hour (still in the future).
+    open_dt = now.replace(hour=open_hour, minute=0, second=0, microsecond=0)
+    if target_date > now.date():
+        open_dt = open_dt + timedelta(days=(target_date - now.date()).days)
+    elapsed = (now - open_dt).total_seconds() / 60.0
+    # "near open" = just at/after the open hour, within the band. Before it, the
+    # day cannot have opened, so waiting is pointless too (unless program-started
+    # immediately, which still falls inside the band once it crosses).
+    return 0 <= elapsed <= band_min
+
+
 def run_booking_race(cfg: dict, target: datetime, preferred: list,
                      wait_for_open: bool = True, timeout: int | None = None,
                      max_attempts: int | None = None, dry_run: bool = False,
@@ -2301,7 +2330,39 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
                                              best, description)
                 return best, slots, status, "slot_found"
 
-        # (4) Nothing bookable yet -> the same 2-minute refresh process.
+        # (4) Nothing bookable yet -> decide whether it is worth refreshing.
+        # The portal opens a day's slots at ``booking_open_hour`` (0 = midnight,
+        # the rolling-window boundary). Retrying only makes sense in a short band
+        # around that open moment: there the server can lag behind the clock and
+        # a few refreshes absorb the out-of-sync. Far from the open moment, a day
+        # whose preferred slots are already taken (or not opened) will stay that
+        # way until the next window slides it in — so we return immediately and
+        # let the scheduler re-attempt it when it actually opens, instead of
+        # flooding the log with "refreshing in 2 min".
+        if ever_opened:
+            # The day IS open. If the user already has a booking for it, their
+            # preferred slots are occupied by that booking — nothing to retry.
+            if is_day_booked(target_date) or already_booked_successfully(
+                    target.strftime("%Y-%m-%d")):
+                print(f"{ts_prefix()} [bot] {target:%a %d %b} is open but you "
+                      f"already have this day booked — done, not retrying.",
+                      flush=True)
+                return None, last_slots, None, "already_booked"
+            if wait_for_open and not _near_window_open(cfg, target_date):
+                print(f"{ts_prefix()} [bot] {target:%a %d %b} is open but no "
+                      f"preferred slot is free and we are away from the open "
+                      f"moment — not retrying; the scheduler retries at open.",
+                      flush=True)
+                return None, last_slots, None, "no_slot"
+        elif wait_for_open and not _near_window_open(cfg, target_date):
+            # Not opened yet AND away from the open moment: waiting now is
+            # pointless. Return and let the scheduler retry when it opens.
+            print(f"{ts_prefix()} [bot] {target:%a %d %b} is inside the window "
+                  f"but not opened by the picker, and we are away from the open "
+                  f"moment — returning now instead of waiting.", flush=True)
+            return None, [], None, "not_yet_open"
+
+        # (4b) We ARE near the open moment: keep the bounded refresh process.
         if (max_attempts is not None and attempt >= max_attempts
                 or datetime.now() >= deadline):
             if not ever_opened:
@@ -2375,6 +2436,10 @@ def cmd_autobook(cfg: dict, args: list) -> None:
     maxw = int(cfg.get("booking_max_wait_minutes", BOOKING_MAX_WAIT_MINUTES))
     best, slots, r, outcome = run_booking_race(
         cfg, target, preferred, dry_run=dry_run)
+    if outcome == "already_booked":
+        print(f"ALREADY BOOKED: {target:%a %d %b %Y} is open but you already "
+              f"have this day booked — nothing to do.")
+        return
     if outcome == "outside_window":
         # Beyond the rolling window: it can never be booked now, so waiting
         # for it would be pointless.
@@ -2582,6 +2647,14 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
             # A future day the picker does not list yet is NOT a failure: it is
             # simply not open, and trigger (3) re-attempts it as soon as the
             # portal starts offering it. Only a past date is truly unbookable.
+            if outcome == "already_booked":
+                # The day is open but you already have it booked (My Bookings /
+                # booked.json): your preferred slots are occupied. Report and
+                # stop — no point refreshing, the scheduler will not need to.
+                log(f"*** {target:%a %d %b %Y} is already booked; nothing more "
+                    f"to do.")
+                notify_(f"ℹ️ {target:%a %d %b} is already booked.")
+                return True
             if outcome in ("outside_window", "not_yet_open"):
                 # Callers pass either a date or a datetime; normalise before
                 # comparing so neither type can raise here.

@@ -319,14 +319,14 @@ class PadelBot:
             _log("[telegram] startup: desired booking timeslots -> "
                  + "; ".join(f"{d}: {', '.join(prefs[d])}" for d in sorted(prefs)))
             self._notify(
-                "🤖 Padel bot started — autobooking is active.\n"
+                "🤖 Autobooking is active.\n"
                 f"Days to book:\n{prefs_str}\n"
                 "I'll book your preferred slot automatically when the "
                 "window opens and let you know right here.")
         else:
             _log("[telegram] startup: no preferred slots configured (send /prefs).")
             self._notify(
-                "🤖 Padel bot started — autobooking is active.\n"
+                "🤖 Autobooking is active.\n"
                 "No preferred slots configured yet — send /prefs to set them.")
         worker = threading.Thread(target=self._poll_loop, daemon=True)
         worker.start()

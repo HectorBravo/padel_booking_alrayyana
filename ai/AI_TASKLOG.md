@@ -4,12 +4,58 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |
 | 13-11-2026 19:52:03 | [T19: setupgoogle defaults, /status Google test, stop retrying booked days](#task-t19-setupgoogle-defaults-status-google-test-stop-retrying-booked-days) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 35m | none |
 | 13-11-2026 19:21:45 | [T18: Make the Google OAuth callback endpoint work (fix the 502)](#task-t18-make-the-google-oauth-callback-endpoint-work-fix-the-502) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 6/6 | 40m | none |
 | 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m | none (live proof awaits Google re-auth) |
 | 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 12m | none |
 
+## Task T20: Auto-login at program start (CLI + telegram) via Gmail OTP
+
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
+- **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
+- **Created**: 15-11-2026 12:45:00
+- **Last Updated**: 15-11-2026 13:10:00
+- **Time Spent**: 25m
+- **Branch**: [`main`](https://github.com/HectorBravo/padel_booking_alrayyana)
+- **Commit(s)**: [be1ab95](https://github.com/HectorBravo/padel_booking_alrayyana/commit/be1ab95), [d7230a8](https://github.com/HectorBravo/padel_booking_alrayyana/commit/d7230a8)
+- **Blockers**: none
+- **Findings & Notes**:
+  - New `ensure_login(cfg)` in padel_booking.py: if `is_logged_in(get_session(), cfg)` → True (no-op); if Google off → False (leave manual path); else run full OTP flow (`login_start` → Gmail capture → `login_finish`). Reuses `_auto_login` defensively.
+  - CLI `main()`: for portal commands (explore/window/slots/book/pick/mybookings/cancel/autobook/keepalive) call `ensure_login(cfg)` before dispatch. Skips login-*/google/telegram.
+  - Telegram: new `_ensure_login_startup()` method (silent console log, no chat_id), called in `run()` right before `_start_autobook()`. No-op if already logged in or Google off.
+  - Verified with a temp mock suite (`ai/_tmp_verify_startup.py`, since deleted): already-logged-in → True no login; google-off → False; google-on → login_finish called with captured OTP. 3/3 PASS. T17 (18/18) + T9 (ALL PASS) regressions green.
+  - Deployed on ububu.lan after CI rebuild: running container has `def ensure_login` and the `_ensure_login_startup()` call before `_start_autobook()`.
+
+### User Confirmations
+
+**Confirmed (user provided):**
+
+- (15-11-2026 12:45:00) "Add auto-login-on-startup so the bot/CLI triggers the full OTP capture flow when no session exists" → implemented in both entry points.
+
+### Subtasks / Plan
+
+- [x] Add `ensure_login(cfg)` (padel_booking.py)
+- [x] Wire into CLI `main()` for portal commands
+- [x] Wire `_ensure_login_startup()` into Telegram `run()` before autobook
+- [x] Compile + verify suites (T17/T9) + startup mock suite
+- [x] Commit/push + redeploy on ububu.lan
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: Self-contained recovery context.
+>
+> - `ensure_login(cfg)` lives at padel_booking.py ~line 493, right before `get_authenticated_session` (~528). It calls `login_start(cfg)` (which internally already tries `_auto_login` Gmail capture), then defensively re-checks `is_logged_in`, then `_auto_login(cfg)` again. Returns bool.
+> - CLI dispatch: after `cfg = load_config(); cmd = sys.argv[1]; args = sys.argv[2:]`, a `needs_session` tuple gate calls `ensure_login(cfg)`. login-start/finish/status, google-*, and telegram are excluded (telegram self-heals via autobook re-login).
+> - Telegram `_ensure_login_startup()` at padel_telegram.py ~line 470, called in `run()` (~299) immediately before `self._start_autobook()`. Uses module-level `is_logged_in`, `get_session`, `google_configured`, `login_start`, `capture_otp`, `login_finish` (all imported at top). Silent: logs via `_log`, no `_send`.
+> - The autobook loop already had `ensure_session()`→`relogin` mid-run; this addition is the STARTUP proactive login so the first booking attempt doesn't wait for a keepalive failure to trigger re-login.
+> - Deploy pattern (unchanged): on `ububu.lan`, after CI rebuild, `docker stop $(docker ps -q --filter "not like=.*")` loop + `docker start <id>`. Container id 94165b3a023f. SSH: `D:\repos\serverconnect\connect.ps1 -C "<remote command>"`.
+> - No config keys added; no new imports.
+
+---
+
 ## Task T19: setupgoogle defaults, /status Google test, stop retrying booked days
+
 
 - **Status**: done
 - **Type**: feat

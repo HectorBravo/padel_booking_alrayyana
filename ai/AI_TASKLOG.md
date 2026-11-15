@@ -4,13 +4,55 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 15-11-2026 23:05:00 | [T21: setupgoogle flow — email, then auth, then pick from real calendar list](#task-t21-setupgoogle-flow--email-then-auth-then-pick-from-real-calendar-list) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 25m | none |
 | 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |
 | 13-11-2026 19:52:03 | [T19: setupgoogle defaults, /status Google test, stop retrying booked days](#task-t19-setupgoogle-defaults-status-google-test-stop-retrying-booked-days) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 35m | none |
 | 13-11-2026 19:21:45 | [T18: Make the Google OAuth callback endpoint work (fix the 502)](#task-t18-make-the-google-oauth-callback-endpoint-work-fix-the-502) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 6/6 | 40m | none |
 | 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m | none (live proof awaits Google re-auth) |
 | 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 12m | none |
 
-## Task T20: Auto-login at program start (CLI + telegram) via Gmail OTP
+## Task T21: setupgoogle flow — email, then auth, then pick from real calendar list
+
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
+- **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
+- **Created**: 15-11-2026 23:05:00
+- **Last Updated**: 15-11-2026 23:20:00
+- **Time Spent**: 25m
+- **Branch**: [`main`](https://github.com/HectorBravo/padel_booking_alrayyana)
+- **Commit(s)**: [da26a13](https://github.com/HectorBravo/padel_booking_alrayyana/commit/da26a13)
+- **Blockers**: none
+- **Findings & Notes**:
+  - New `/setupgoogle` flow: (1) ask Google email (keep-current / New buttons when already configured), then (2) OAuth authenticate, then (3) list the user's REAL calendars via `GoogleCalendar.list_calendars()` as tap buttons; the tapped calendar id is saved directly to `google_calendar.calendar`. No more typing a calendar name that may not exist.
+  - `_on_setupgoogle` → email step. `_gcal_after_email` reuses the saved client pair (or asks for it) then `_gcal_start_auth`. `_gcal_finish_auth` now saves tokens WITHOUT choosing a calendar, then calls `_gcal_calendar_buttons`. New `_gcal_pick_calendar(idx)` saves the chosen id and runs `_gcal_test_and_report`.
+  - Calendar buttons use `gc:cal:<index>` (short, safe) with the id list stored in `pending[chat]["_calendars"]`; primary calendar marked ⭐.
+  - Removed old methods: `_gcal_calendar_keyboard`, `gc_cfg_calendar`, `_gcal_prefill_calendar`, and the `gcal_calendar` text step + `keep_cal`/`new_cal` callbacks.
+  - Verified: all 4 modules compile; T9 ALL PASS; a flow static-check (7 assertions) ALL PASS. Deployed on ububu.lan after a 120s CI wait (`da26a13`): running container has `_gcal_calendar_buttons`=1, `_gcal_pick_calendar`=1, `_gcal_test_and_report`=1, `gc:cal:`=1, and `_gcal_prefill_calendar`=0 (old flow gone); clean boot + autobook active.
+
+### User Confirmations
+
+**Confirmed (user provided):**
+
+- (15-11-2026 23:05:00) "Change setupgoogle to: ask email, then authenticate, then list the user's calendars as buttons to pick an existing one" → implemented.
+
+### Subtasks / Plan
+
+- [x] Rewrite `_on_setupgoogle` (email step only)
+- [x] Add `_gcal_after_email`, `_gcal_calendar_buttons`, `_gcal_pick_calendar`, `_gcal_test_and_report`; split `_gcal_finish_auth`
+- [x] Remove old calendar-typing methods/steps/callbacks
+- [x] Compile + T9 + flow static-check; commit/push (`da26a13`) + redeploy on ububu.lan with proof
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: self-contained recovery knowledge.
+>
+> Flow state machine (pending[chat]["action"]): `gcal_email` → (validate email) `_gcal_after_email` → if client pair saved: `_gcal_start_auth`; else `gcal_client_id` → `gcal_client_secret` → `_gcal_start_auth`. Auth completes via callback file poll or manual code → `_gcal_finish_auth` (saves tokens, keeps prior calendar id so list works) → `_gcal_calendar_buttons` sets action `gcal_pick` + `_calendars` id list. Button `gc:cal:<i>` → `_gcal_pick_calendar` saves `google_calendar.calendar = <id>`, then `_gcal_test_and_report`.
+> - `list_calendars()` (google_calendar.py:161) hits `/users/me/calendarList`, returns `{id, summary, primary}` items using the refresh token.
+> - Calendar ids stored raw; `_resolve_calendar_id` uses them directly when they contain `@` or `-`.
+> - Editor tool repeatedly failed exact-match on multi-line blocks this session; used PowerShell base64 → file + Python splice scripts (all temp files cleaned up).
+
+---
+
+
 
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>

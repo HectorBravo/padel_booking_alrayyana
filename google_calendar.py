@@ -659,7 +659,7 @@ def run_google_test(cfg: dict) -> None:
         time_max = (now + timedelta(days=7)).isoformat()
 
         resp = requests.get(
-            f"{CALENDAR_API}/calendars/{gc.email}/events",
+            f"{CALENDAR_API}/calendars/{gc.calendar_id}/events",
             params={
                 "timeMin": time_min,
                 "timeMax": time_max,
@@ -706,7 +706,7 @@ def test_connection(cfg: dict) -> tuple:
         from datetime import datetime, timedelta
         token = gc._get_access_token()
         resp = requests.get(
-            f"{CALENDAR_API}/calendars/{gc.email}/events",
+            f"{CALENDAR_API}/calendars/{gc.calendar_id}/events",
             params={"timeMin": datetime.now().isoformat(),
                     "timeMax": (datetime.now() + timedelta(days=7)).isoformat(),
                     "maxResults": 1, "singleEvents": "true"},

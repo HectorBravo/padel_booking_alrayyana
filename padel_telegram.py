@@ -467,12 +467,14 @@ class PadelBot:
         else:
             self._send(chat_id, f"Unknown command {cmd}\n\n/help for the list.")
 
-    def _otp_from_gmail(self, chat_id: int) -> bool:
+    def _otp_from_gmail(self, chat_id: int, since: float | None = None) -> bool:
         """Try to finish a pending login with the OTP read from Gmail.
 
         Only attempted when the Google integration is configured; the manual
         "reply with the 6-digit code" path stays as the fallback.  Returns
-        True when the login finished.
+        True when the login finished.  ``since`` (epoch seconds) is the arrival
+        floor: only an OTP email that landed at/after it counts as this login's,
+        so a previous login's OTP is never reused.
         """
         if not google_configured(self.cfg):
             return False
@@ -483,7 +485,7 @@ class PadelBot:
         def _gmail_log(msg: str) -> None:
             _log(f"[otp-gmail] {msg.strip()}")
 
-        otp, error = capture_otp(self.cfg, log=_gmail_log)
+        otp, error = capture_otp(self.cfg, log=_gmail_log, since=since)
         if not otp:
             self._send(chat_id, f"⚠️ I could not read the OTP from Gmail: "
                                 f"{error}\n\nReply here with the 6-digit code "
@@ -501,6 +503,9 @@ class PadelBot:
 
     def _on_login(self, chat_id: int) -> None:
         """Start the two-step login, then wait for the OTP code here."""
+        # Arrival-time floor for the Gmail OTP scan: only an email that landed
+        # after this point counts as THIS login's OTP (never an older one).
+        since = time.time()
         try:
             login_start(self.cfg)
         except Exception as e:  # pylint: disable=broad-exception-caught
@@ -509,7 +514,7 @@ class PadelBot:
         # With Google configured the OTP never reaches the user: grab it from
         # Gmail ourselves.  Only fall back to waiting for a typed code when
         # that is not possible.
-        if self._otp_from_gmail(chat_id):
+        if self._otp_from_gmail(chat_id, since):
             return
         self.pending[chat_id] = {"action": "otp"}
         self._send(chat_id, "📧 OTP sent to your email.\n"
@@ -1242,6 +1247,9 @@ class PadelBot:
         so no 409 conflict), and blocks until the code arrives or it times
         out. Returns True only when the login finished successfully.
         """
+        # Arrival-time floor: only an OTP email that landed after this counts as
+        # the fresh re-login's code, never a previous one.
+        since = time.time()
         try:
             login_start(self.cfg)
         except Exception as e:  # pylint: disable=broad-exception-caught
@@ -1254,7 +1262,8 @@ class PadelBot:
                          "📥 Reading the OTP from your Gmail (up to a minute).")
             otp, error = capture_otp(self.cfg,
                                      log=lambda m: _log(f"[otp-gmail] "
-                                                        f"{m.strip()}"))
+                                                        f"{m.strip()}"),
+                                     since=since)
             if otp:
                 try:
                     login_finish(self.cfg, otp)

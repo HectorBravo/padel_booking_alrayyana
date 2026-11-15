@@ -365,7 +365,18 @@ def _auto_login(cfg: dict) -> bool:
         return False
     print("  -> Google integration is on: reading the OTP from Gmail "
           "(no need to type it)...")
-    otp, error = capture_otp(cfg)
+    # Only consider OTP emails that arrived after THIS login attempt started.
+    # login_start stashed 'created_at' in pending_login.json right before it
+    # sent the OTP email, so use that as the arrival-time lower bound (falling
+    # back to "now" if the file is unreadable).
+    since = None
+    try:
+        st = json.loads(PENDING_FILE.read_text(encoding="utf-8"))
+        created = datetime.fromisoformat(st["created_at"])
+        since = created.timestamp()
+    except (OSError, KeyError, ValueError, TypeError):
+        pass
+    otp, error = capture_otp(cfg, since=since)
     if not otp:
         print(f"  -> Could not capture the OTP automatically: {error}")
         return False

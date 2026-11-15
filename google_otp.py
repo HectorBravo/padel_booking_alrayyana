@@ -52,6 +52,10 @@ OTP_BODY_RE = re.compile(
 # OTP within seconds or not at all).
 OTP_POLL_INTERVAL = 5
 OTP_MAX_RETRIES = 12
+# Slack (seconds) subtracted from the "since" arrival-time bound so a portal OTP
+# email that lands milliseconds before capture starts — or when Gmail's clock is
+# slightly ahead of the local one — still counts as this attempt's OTP.
+OTP_CLOCK_TOLERANCE_S = 90
 
 
 class GoogleOtpError(Exception):
@@ -119,11 +123,27 @@ def _gmail_get(url: str, token: str, params: dict) -> dict:
 
 
 def _list_otp_messages(token: str) -> list:
-    """Return the ids of recent OTP emails, newest first."""
+    """Return [(id, internalDate_ms)] for recent OTP emails, newest first.
+
+    ``internalDate`` is the email's arrival time in epoch milliseconds (a cheap
+    field on the list request), which lets callers keep only the messages that
+    arrived *after* a login attempt started — i.e. this attempt's OTP, never an
+    older one from a previous login.
+    """
     data = _gmail_get(
         f"{GMAIL_API}/messages", token,
-        {"q": OTP_QUERY, "maxResults": 10, "fields": "messages(id)"})
-    return [m["id"] for m in data.get("messages", []) if m.get("id")]
+        {"q": OTP_QUERY, "maxResults": 10,
+         "fields": "messages(id,internalDate)"})
+    out = []
+    for m in data.get("messages", []):
+        if not m.get("id"):
+            continue
+        try:
+            when = int(m.get("internalDate") or 0)
+        except (TypeError, ValueError):
+            when = 0
+        out.append((m["id"], when))
+    return out
 
 
 def _get_message(token: str, msg_id: str) -> dict:
@@ -209,41 +229,47 @@ def _write_last_otp(otp: str) -> None:
         pass
 
 
-def find_otp_in_inbox(token: str, skip: str = "") -> tuple:
-    """Scan recent OTP emails once.
+def find_otp_in_inbox(token: str, since_ms: int = 0) -> tuple:
+    """Scan recent OTP emails once, keeping only the ones that arrived at/after
+    ``since_ms`` (epoch ms).
 
     Returns (otp, state) where otp is '' when nothing usable was found and
-    state explains what was seen ('' / 'no_message' / 'no_code' / 'stale').
+    state explains what was seen ('' / 'no_message' / 'no_code'). Because the
+    filter is on arrival time — not on a remembered code value — an OTP email
+    from THIS login attempt is always accepted even if its digits happen to
+    equal a previous login's, and any older OTP email is ignored outright.
     """
-    ids = _list_otp_messages(token)
-    if not ids:
+    msgs = _list_otp_messages(token)
+    if not msgs:
         return "", "no_message"
-    seen_code, seen_sender = "", ""
-    for msg_id in ids:
+    for msg_id, when in msgs:
+        # An unknown arrival time (0) is treated as "not filtered out" so a
+        # missing field never silently drops a fresh OTP.
+        if since_ms and when and when < since_ms:
+            continue
         msg = _get_message(token, msg_id)
         if not sender_matches(msg):
             continue
         otp = extract_otp(message_text(msg))
-        if not otp:
-            continue
-        seen_code = otp
-        if skip and otp == skip:
-            continue          # the previous login's code — not ours
-        return otp, ""
-    if seen_code:
-        return "", "stale"     # only the already-used code is in the inbox
+        if otp:
+            return otp, ""
     return "", "no_code"
 
 
-def capture_otp(cfg: dict, log=None, skip: str = "") -> tuple:
+def capture_otp(cfg: dict, log=None, since: float | None = None) -> tuple:
     """Poll Gmail for the portal OTP.  Returns (otp, error).
 
     *otp* is the 6-digit code ('' on failure); *error* is a short human
     message explaining why nothing was captured.  Never raises: callers can
     fall back to asking the user.
 
-    `skip` lets a caller ignore a code it already knows is dead (e.g. the one
-    that just expired), which otherwise would be picked up again immediately.
+    Only OTP emails that ARRIVED AT OR AFTER ``since`` (epoch seconds) are
+    considered — i.e. this login attempt's email, never an older one from a
+    previous login. ``since`` defaults to the moment capture starts. Callers
+    that trigger the portal first (login_start) should pass the timestamp taken
+    just before triggering, so the freshly-sent OTP is always inside the window.
+    A small tolerance absorbs clock skew between Gmail's arrival time and the
+    local clock.
     """
     if log is None:
         log = lambda m: print(m, flush=True)  # noqa: E731
@@ -257,11 +283,16 @@ def capture_otp(cfg: dict, log=None, skip: str = "") -> tuple:
         log(f"  -> Gmail: {e}")
         return "", str(e)
 
-    stale = skip or _read_last_otp()
+    # Epoch ms lower-bound for arrival-time filtering. Default to "now", nudged
+    # back a little so a portal email that arrives milliseconds before we began
+    # polling (or with slight clock skew) still counts as this attempt's OTP.
+    base = since if since is not None else time.time()
+    since_ms = int((base - OTP_CLOCK_TOLERANCE_S) * 1000)
+
     last_state = ""
     for attempt in range(1, OTP_MAX_RETRIES + 1):
         try:
-            otp, state = find_otp_in_inbox(token, skip=stale)
+            otp, state = find_otp_in_inbox(token, since_ms=since_ms)
         except GoogleOtpError as e:
             log(f"  -> Gmail check {attempt}/{OTP_MAX_RETRIES} failed: {e}")
             return "", str(e)
@@ -277,9 +308,8 @@ def capture_otp(cfg: dict, log=None, skip: str = "") -> tuple:
             time.sleep(OTP_POLL_INTERVAL)
 
     reason = {"no_message": f"no email from {OTP_SENDER_DOMAIN} arrived",
-              "no_code": "the Asteco email did not contain an OTP code",
-              "stale": "only a previous (already used) OTP was found"}.get(
-                  last_state, "no OTP email arrived")
+              "no_code": "the Asteco email did not contain an OTP code"}.get(
+                  last_state, "no fresh OTP email arrived")
     msg = (f"No OTP from {OTP_SENDER_DOMAIN} after "
            f"{OTP_MAX_RETRIES} tries in ~"
            f"{OTP_MAX_RETRIES * OTP_POLL_INTERVAL}s ({reason}).")

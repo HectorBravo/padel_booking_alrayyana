@@ -14,11 +14,16 @@ def b64(text: str) -> str:
 
 
 def otp_message(otp="315813", sender="Asteco <no-reply@asteco.com>",
-                body=None):
-    """A Gmail API 'full' message shaped like the real OTP email."""
+                body=None, internal_date=0):
+    """A Gmail API 'full' message shaped like the real OTP email.
+
+    ``internal_date`` is epoch ms; capture keeps only messages at/after the
+    login's arrival floor. Default 0 means "unknown" (never filtered out).
+    """
     if body is None:
         body = f"Dear user, {otp} is your ASTECO OTP. It expires in 5 minutes."
     return {"id": f"msg-{otp}",
+            "internalDate": str(internal_date) if internal_date else "",
             "snippet": body[:60],
             "payload": {
                 "mimeType": "text/plain",
@@ -47,7 +52,9 @@ class FakeGmail:
         if url.endswith("/messages"):
             self.list_calls += 1
             page = self.pages[min(self.list_calls - 1, len(self.pages) - 1)]
-            return {"messages": [{"id": m["id"]} for m in page]}
+            return {"messages": [{"id": m["id"],
+                                  "internalDate": m.get("internalDate", "")}
+                                 for m in page]}
         msg_id = url.rsplit("/", 1)[1]
         for page in self.pages:
             for m in page:
@@ -58,7 +65,7 @@ class FakeGmail:
 
 
 def run(name, pages, expect_otp, expect_min_polls=None,
-        expect_max_polls=None, skip="", last_file="", cfg=CFG):
+        expect_max_polls=None, since=None, cfg=CFG):
     """Patch the token + Gmail calls and drive capture_otp."""
     fake = FakeGmail(pages)
     slept = []
@@ -67,9 +74,8 @@ def run(name, pages, expect_otp, expect_min_polls=None,
     with patch.object(go, "_get_access_token", lambda cfg: "tok"), \
          patch.object(go, "_gmail_get", fake.get), \
          patch.object(go.time, "sleep", lambda s: slept.append(s)), \
-         patch.object(go, "_read_last_otp", lambda: last_file), \
          patch.object(go, "_write_last_otp", written.append):
-        otp, error = go.capture_otp(cfg, log=lambda m: None, skip=skip)
+        otp, error = go.capture_otp(cfg, log=lambda m: None, since=since)
 
     ok = otp == expect_otp
     if expect_min_polls is not None:
@@ -106,19 +112,23 @@ results.append(run(
     expect_otp="", expect_min_polls=go.OTP_MAX_RETRIES,
     expect_max_polls=go.OTP_MAX_RETRIES))
 
-# 4. Only the previous (already used) OTP is in the inbox -> treated as stale,
-#    retried until the budget runs out instead of re-submitting a dead code.
+# 4. The only OTP email arrived BEFORE the login's arrival floor -> it belongs
+#    to a previous login, so it is ignored and capture keeps waiting (returns
+#    nothing) rather than re-submitting a dead code.
+T0 = 1_700_000_000  # a realistic epoch seconds reference for the fixtures
 results.append(run(
-    "inbox holds only the stale code -> keeps waiting, returns nothing",
-    pages=[[otp_message("111111")]],
-    expect_otp="", skip="111111",
+    "inbox holds only an OLDER OTP email -> keeps waiting, returns nothing",
+    pages=[[otp_message("111111", internal_date=(T0 - 3600) * 1000)]],
+    expect_otp="", since=T0,   # floor is 1h after the old arrival
     expect_min_polls=go.OTP_MAX_RETRIES))
 
-# 5. A fresh code next to a stale one -> the fresh one wins.
+# 5. An older code next to a fresh one (arrived after the floor) -> the fresh
+#    one wins, on the first poll.
 results.append(run(
-    "stale + fresh codes in the inbox -> picks the fresh one",
-    pages=[[otp_message("222222"), otp_message("111111")]],
-    expect_otp="222222", skip="111111", expect_max_polls=1))
+    "older + fresh OTP emails in the inbox -> picks the fresh one",
+    pages=[[otp_message("222222", internal_date=(T0 + 60) * 1000),
+           otp_message("111111", internal_date=(T0 - 3600) * 1000)]],
+    expect_otp="222222", since=T0, expect_max_polls=1))
 
 # 6. Sender filter: an email from another domain that contains the phrase must
 #    be ignored (the user asked for senders of the asteco.com domain only).
@@ -196,7 +206,7 @@ class StartHarness:
             text = "<html></html>"
         return R()
 
-    def capture(self, cfg, log=None, skip=""):
+    def capture(self, cfg, log=None, since=None):
         return self._otp, self._error
 
     def login_finish(self, cfg, otp):
@@ -257,7 +267,7 @@ def tg_case(name, otp, error, expect_pending):
     keep waiting for a typed code, so both are exercised here."""
     bot = BotStub(CFG)
     with patch.object(pt, "capture_otp",
-                      lambda cfg, log=None, skip="": (otp, error)), \
+                      lambda cfg, log=None, since=None: (otp, error)), \
          patch.object(pt, "login_finish", lambda cfg, o: None), \
          patch.object(pt, "login_start", lambda cfg: None):
         finished = bot._otp_from_gmail(1)

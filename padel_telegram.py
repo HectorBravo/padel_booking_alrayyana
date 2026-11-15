@@ -530,7 +530,14 @@ class PadelBot:
         elif gok is None:
             self._notify("📅 Google Calendar not configured - booking still works; send /setupgoogle to enable sync + auto-OTP.")
         else:
-            self._notify(f"⚠️ Google Calendar configured but NOT active: {gdetail}. Send /setupgoogle to fix.")
+            # Configured but the token/access is dead (e.g. revoked or expired).
+            # Do not just warn - kick off the interactive re-setup so the user can
+            # fix it in one tap, exactly as if they had sent /setupgoogle.
+            self._notify(f"⚠️ Google Calendar configured but NOT active: {gdetail}. Starting the setup so you can re-authorize...")
+            if self.chat_ids:
+                self._on_setupgoogle(self.chat_ids[0])
+            else:
+                self._notify("No chat to prompt - send /setupgoogle to fix.")
 
 
     def _otp_from_gmail(self, chat_id: int, since: float | None = None) -> bool:

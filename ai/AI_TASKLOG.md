@@ -15,10 +15,10 @@
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
 - **Created**: 15-11-2026 12:45:00
-- **Last Updated**: 15-11-2026 13:10:00
-- **Time Spent**: 25m
+- **Last Updated**: 15-11-2026 17:40:00
+- **Time Spent**: 1h 5m
 - **Branch**: [`main`](https://github.com/HectorBravo/padel_booking_alrayyana)
-- **Commit(s)**: [be1ab95](https://github.com/HectorBravo/padel_booking_alrayyana/commit/be1ab95), [d7230a8](https://github.com/HectorBravo/padel_booking_alrayyana/commit/d7230a8)
+- **Commit(s)**: [be1ab95](https://github.com/HectorBravo/padel_booking_alrayyana/commit/be1ab95), [025a028](https://github.com/HectorBravo/padel_booking_alrayyana/commit/025a028), [7d618e1](https://github.com/HectorBravo/padel_booking_alrayyana/commit/7d618e1), [d63005b](https://github.com/HectorBravo/padel_booking_alrayyana/commit/d63005b)
 - **Blockers**: none
 - **Findings & Notes**:
   - New `ensure_login(cfg)` in padel_booking.py: if `is_logged_in(get_session(), cfg)` → True (no-op); if Google off → False (leave manual path); else run full OTP flow (`login_start` → Gmail capture → `login_finish`). Reuses `_auto_login` defensively.
@@ -28,6 +28,7 @@
   - Deployed on ububu.lan after CI rebuild: running container has `def ensure_login` and the `_ensure_login_startup()` call before `_start_autobook()`.
   - **Deploy proof (15-11-2026 17:07)**: connected via PuTTY `plink.exe -batch hbravo@ububu.lan` (Pageant agent). `docker compose up --wait` → Pulled fresh image, Recreated + Started + Healthy. Running container `cf7d029a6017` (Up, 8010->8010): grep confirms `ensure_login`=2, `_ensure_login_startup`=2, `needs_session` gate present. Bot log shows clean boot → autobook booking active (valid session at startup).
   - **Forced-relogin-at-boot proof (15-11-2026 17:11)**: deleted `session.json` from volume `padel-booking_padel-data` (sudo), then `docker compose up --wait`. Boot log: `[telegram] no live session at startup — running an automatic login (OTP read from Gmail)...` → OTP sent → Gmail captured 859064 (expired, stale email) → defensive second `_auto_login` captured fresh 690900 → `Login successful. Session saved` → `✅ session established at startup from Gmail` → autobook started. `session.json` recreated, login-status valid=True. Proves the startup OTP-capture path fires when no session exists.
+  - Emoji icons on startup-login messages (commits 025a028, 7d618e1, d63005b): the boot relogin now pushes the SAME user-facing chat messages as /login + _otp_from_gmail, with matching emoji: warning sign on the no-session line, email emoji on Gmail-mentioning lines, green tick on the success line. Verified live on ububu.lan (boot 17:38:20): fresh OTP captured first try, Login successful, session valid=True; running container line 490 shows the warning icon.
 
 ### User Confirmations
 

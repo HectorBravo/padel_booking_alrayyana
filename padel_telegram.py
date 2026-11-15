@@ -299,6 +299,8 @@ class PadelBot:
         # First, if there is no live session, establish one automatically so the
         # bot boots already authenticated (Google OTP read from Gmail).
         self._ensure_login_startup()
+        # Report session + Google state to the user before the banner.
+        self._startup_status()
         self._start_autobook()
         # Build a startup message that includes the preferred slots,
         # similar to the /prefs save confirmation.
@@ -320,10 +322,6 @@ class PadelBot:
             self._notify(
                 "🤖 Padel bot started — autobooking is active.\n"
                 "No preferred slots configured yet — send /prefs to set them.")
-        # Check Google Calendar configuration and notify if missing
-        gc_ready, gc_msg = get_setup_status(self.cfg)
-        if not gc_ready:
-            self._notify(gc_msg)
         worker = threading.Thread(target=self._poll_loop, daemon=True)
         worker.start()
         try:
@@ -512,6 +510,26 @@ class PadelBot:
         except Exception as e:  # pylint: disable=broad-exception-caught
             _log(f"[telegram] startup login failed to finish: {e}")
             self._notify(f"Startup login failed with the captured OTP ({otp}): {e}. Send /login to try again.")
+
+
+    def _startup_status(self) -> None:
+        """Report session + Google integration state at program startup.
+
+        Sent before the Padel bot started banner so the user can see, right at
+        boot, whether the portal session is valid and whether the Google
+        Calendar integration is active (a live token test, not just presence).
+        """
+        if is_logged_in(get_session(), self.cfg):
+            self._notify("✅ Logged in - session is valid")
+        else:
+            self._notify("⚠️ No valid portal session at startup - send /login to authenticate.")
+        gok, gdetail = test_connection(self.cfg)
+        if gok is True:
+            self._notify("📅 Google Calendar active - sync and OTP reading are on.")
+        elif gok is None:
+            self._notify("📅 Google Calendar not configured - booking still works; send /setupgoogle to enable sync + auto-OTP.")
+        else:
+            self._notify(f"⚠️ Google Calendar configured but NOT active: {gdetail}. Send /setupgoogle to fix.")
 
 
     def _otp_from_gmail(self, chat_id: int, since: float | None = None) -> bool:

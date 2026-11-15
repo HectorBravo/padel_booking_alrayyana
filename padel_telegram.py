@@ -498,17 +498,17 @@ class PadelBot:
 
         def _gmail_log(msg: str) -> None:
             _log(f"[otp-gmail] {msg.strip()}")
-        self._notify("Google integration is on - reading the OTP from your Gmail (up to a minute), so you do not need to type it.")
+        self._notify("📧 Google integration is on - reading the OTP from your Gmail (up to a minute), so you do not need to type it.")
         otp, error = capture_otp(self.cfg, log=_gmail_log, since=since)
         if not otp:
             _log(f"[telegram] startup login: no OTP from Gmail ({error}); "
                  "autobooking will retry / user can send /login.")
-            self._notify(f"Could not read the OTP from Gmail: {error}. Autobooking will retry, or send /login to restart.")
+            self._notify(f"📧 Could not read the OTP from Gmail: {error}. Autobooking will retry, or send /login to restart.")
             return
         try:
             login_finish(self.cfg, otp)
             _log("[telegram] session established at startup from Gmail.")
-            self._notify(f"Login successful - session saved (OTP {otp} read from Gmail). Autobooking is starting.")
+            self._notify(f"✅ Login successful - session saved (OTP {otp} read from Gmail). Autobooking is starting.")
         except Exception as e:  # pylint: disable=broad-exception-caught
             _log(f"[telegram] startup login failed to finish: {e}")
             self._notify(f"Startup login failed with the captured OTP ({otp}): {e}. Send /login to try again.")

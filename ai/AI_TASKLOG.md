@@ -26,6 +26,7 @@
   - `run()` now sends `self._notify("🚀 Bot started.")` right after the command menu is set — the first chat message at boot (before login/status/banner).
   - `_startup_status()` now also writes console (`_log`) lines: portal session valid/invalid, and Google active / not-configured / configured-but-not-active. The run() banner block logs the desired booking timeslots (or "no preferred slots").
   - Deployed on ububu.lan after a 120s CI wait; live boot log shows: `startup: portal session is valid.` / `startup: Google Calendar active (sync + OTP reading on).` / `startup: desired booking timeslots -> sunday: 19:00, 20:00, 21:00; tuesday: 20:00, 19:00, 21:00`. Container Up/Healthy.
+  - Follow-up (`fd9aa8e`, deployed): dropped the redundant "Padel bot started —" prefix from both autobooking banner messages (now start with "🤖 Autobooking is active.") since the 🚀 Bot started message already announces startup. Docstring cleanup `6868c04`.
 
 ### User Confirmations
 

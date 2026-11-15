@@ -873,7 +873,13 @@ class PadelBot:
         gc = self.cfg["google_calendar"]
         gc["enabled"] = True
         gc["email"] = data["email"]
-        gc["calendar"] = data.get("calendar", "")
+        # Only overwrite the calendar when one was actually chosen; an empty
+        # value here would otherwise clobber a previously-good named calendar.
+        cal_val = data.get("calendar", "")
+        if cal_val:
+            gc["calendar"] = cal_val
+        else:
+            gc.setdefault("calendar", "default")
         gc["client_id"] = data["client_id"]
         gc["client_secret"] = data["client_secret"]
         gc["refresh_token"] = refresh_token

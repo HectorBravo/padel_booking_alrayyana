@@ -293,6 +293,8 @@ class PadelBot:
             self.api.set_my_commands(commands)
         except TelegramError as e:
             _log(f"[telegram] warning: command menu not set: {e}")
+        # First thing the user sees in chat: the bot has come up.
+        self._notify("🚀 Bot started.")
         # Start the background autobooking scheduler (keep-alive + booking
         # race) so `python padel_booking.py telegram` also autobooks and
         # pushes Telegram notifications (booked / failed / OTP expiry).

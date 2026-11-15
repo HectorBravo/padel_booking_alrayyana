@@ -931,8 +931,10 @@ class PadelBot:
         gc = self.cfg.get("google_calendar", {})
         if gc.get("enabled"):
             gok, gdetail = test_connection(self.cfg)
-            if gok:
+            if gok is True:
                 self._send(chat_id, f"📅 Google: {gdetail} ✅")
+            elif gok is None:
+                self._send(chat_id, "📅 Google Calendar not configured - send /setupgoogle to enable.")
             else:
                 self._send(chat_id,
                     f"⚠️ Google connection broken: {gdetail}\n"

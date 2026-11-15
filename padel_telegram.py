@@ -42,7 +42,8 @@ from google_calendar import (
     sync_booking, sync_cancellation, get_setup_status,
     run_google_auth, run_google_test, run_google_list_calendars,
     start_callback_server, generate_auth_url, exchange_code_for_tokens,
-    test_connection,
+    test_connection, _callback_port_in_use, OAUTH_CALLBACK_FILE,
+    serve_callback_forever,
 )
 from google_otp import capture_otp, google_configured
 
@@ -749,41 +750,83 @@ class PadelBot:
                 self._gcal_finish_auth(chat_id, data, text)
 
     def _gcal_start_auth(self, chat_id: int, data: dict) -> None:
-        """Start the OAuth callback server and send the auth URL."""
+        """Start the OAuth callback capture and send the auth URL.
+
+        The long-running bot already owns the callback port via serve_callback_forever, so we must not bind it again (that raises address-already-in-use). When something is serving the port we poll OAUTH_CALLBACK_FILE for the code that nginx forwards here; only when nothing is do we bring up a one-shot server.
+        """
+        import time
+        import threading
         redirect_uri = "https://padel-booking.destr0.com/callback"
         try:
-            result, server = start_callback_server(8010)
-        except Exception as e:
-            self._send(chat_id, f"❌ Could not start auth server: {e}")
-            self.pending.pop(chat_id, None)
-            return
+            OAUTH_CALLBACK_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
         auth_url = generate_auth_url(data["client_id"], redirect_uri)
+
+        def _result_from_file(timeout: int = 120) -> dict:
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                try:
+                    return json.loads(OAUTH_CALLBACK_FILE.read_text(encoding="utf-8"))
+                except (FileNotFoundError, OSError, ValueError):
+                    time.sleep(1.0)
+            return {}
+
+        persistent = _callback_port_in_use(8010)
+
         self.pending[chat_id] = {
             "action": "gcal_code",
             "data": data,
-            "_result": result,
-            "_server": server,
+            "_result": {},
         }
         self._send(chat_id,
             "✅ Credentials saved. Now authorize:\n\n"
             f"🔗 {auth_url}\n\n"
             "Open that link in your browser and approve access.\n"
-            "If the page doesn't load, copy the 'code' parameter "
-            "from the URL and send it to me here.")
-        import threading
+            "If the page does not load, copy the code parameter from the URL "
+            "and send it to me here.")
+
+
         def _watch():
-            for _ in range(600):
-                import time; time.sleep(0.5)
-                r = result
+            if persistent:
+                res = _result_from_file()
+                r = self.pending.get(chat_id, {}).get("_result", {})
                 if r.get("code") or r.get("error"):
-                    if self.pending.get(chat_id, {}).get("action") == "gcal_code":
-                        if r.get("code"):
-                            self._gcal_finish_auth(chat_id, data, r["code"])
-                        else:
-                            self._send(chat_id, f"❌ Auth error: {r['error']}")
-                            self.pending.pop(chat_id, None)
-                        return
+                    return  # a manual code arrived first via chat
+                err = res.get("error")
+                if err:
+                    self._send(chat_id, f"❌ Auth error: {err}")
+                    self.pending.pop(chat_id, None)
+                elif res.get("code"):
+                    self._gcal_finish_auth(chat_id, data, res["code"])
+                return
+            # Nothing serving the port: bring up a one-shot server here.
+            try:
+                result, server = start_callback_server(8010)
+            except Exception as e:
+                self._send(chat_id, f"❌ Could not start auth server: {e}")
+                self.pending.pop(chat_id, None)
+                return
+            self.pending[chat_id]["_result"] = result
+            self.pending[chat_id]["_server"] = server
+            for _ in range(600):
+                time.sleep(0.5)
+                if result.get("code") or result.get("error"):
+                    break
+            r = self.pending.get(chat_id, {}).get("_result", {})
+            err = r.get("error")
+            if r.get("code"):
+                self._gcal_finish_auth(chat_id, data, r["code"])
+            elif err:
+                self._send(chat_id, f"❌ Auth error: {err}")
+                self.pending.pop(chat_id, None)
+            else:
+                fr = _result_from_file(timeout=5)
+                if fr.get("code"):
+                    self._gcal_finish_auth(chat_id, data, fr["code"])
+
         threading.Thread(target=_watch, daemon=True).start()
+
 
     def _gcal_finish_auth(self, chat_id: int, data: dict,
                           code: str) -> None:

@@ -26,6 +26,7 @@
   - Telegram: new `_ensure_login_startup()` method (silent console log, no chat_id), called in `run()` right before `_start_autobook()`. No-op if already logged in or Google off.
   - Verified with a temp mock suite (`ai/_tmp_verify_startup.py`, since deleted): already-logged-in → True no login; google-off → False; google-on → login_finish called with captured OTP. 3/3 PASS. T17 (18/18) + T9 (ALL PASS) regressions green.
   - Deployed on ububu.lan after CI rebuild: running container has `def ensure_login` and the `_ensure_login_startup()` call before `_start_autobook()`.
+  - **Deploy proof (15-11-2026 17:07)**: connected via PuTTY `plink.exe -batch hbravo@ububu.lan` (Pageant agent). `docker compose up --wait` → Pulled fresh image, Recreated + Started + Healthy. Running container `cf7d029a6017` (Up, 8010->8010): grep confirms `ensure_login`=2, `_ensure_login_startup`=2, `needs_session` gate present. Bot log shows clean boot → autobook booking active (valid session at startup).
 
 ### User Confirmations
 

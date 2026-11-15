@@ -316,12 +316,15 @@ class PadelBot:
                     for t in prefs[d])
                 day_lines.append(f"  {d.capitalize()} — {times}")
             prefs_str = "\n".join(day_lines)
+            _log("[telegram] startup: desired booking timeslots -> "
+                 + "; ".join(f"{d}: {', '.join(prefs[d])}" for d in sorted(prefs)))
             self._notify(
                 "🤖 Padel bot started — autobooking is active.\n"
                 f"Days to book:\n{prefs_str}\n"
                 "I'll book your preferred slot automatically when the "
                 "window opens and let you know right here.")
         else:
+            _log("[telegram] startup: no preferred slots configured (send /prefs).")
             self._notify(
                 "🤖 Padel bot started — autobooking is active.\n"
                 "No preferred slots configured yet — send /prefs to set them.")
@@ -523,18 +526,23 @@ class PadelBot:
         Calendar integration is active (a live token test, not just presence).
         """
         if is_logged_in(get_session(), self.cfg):
+            _log("[telegram] startup: portal session is valid.")
             self._notify("✅ Logged in - session is valid")
         else:
+            _log("[telegram] startup: NO valid portal session (login needed).")
             self._notify("⚠️ No valid portal session at startup - send /login to authenticate.")
         gok, gdetail = test_connection(self.cfg)
         if gok is True:
+            _log("[telegram] startup: Google Calendar active (sync + OTP reading on).")
             self._notify("📅 Google Calendar active - sync and OTP reading are on.")
         elif gok is None:
+            _log("[telegram] startup: Google Calendar not configured.")
             self._notify("📅 Google Calendar not configured - booking still works; send /setupgoogle to enable sync + auto-OTP.")
         else:
             # Configured but the token/access is dead (e.g. revoked or expired).
             # Do not just warn - kick off the interactive re-setup so the user can
             # fix it in one tap, exactly as if they had sent /setupgoogle.
+            _log(f"[telegram] startup: Google Calendar configured but NOT active ({gdetail}); starting re-setup.")
             self._notify(f"⚠️ Google Calendar configured but NOT active: {gdetail}. Starting the setup so you can re-authorize...")
             if self.chat_ids:
                 self._on_setupgoogle(self.chat_ids[0])

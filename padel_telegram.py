@@ -521,7 +521,7 @@ class PadelBot:
     def _startup_status(self) -> None:
         """Report session + Google integration state at program startup.
 
-        Sent before the Padel bot started banner so the user can see, right at
+        Sent before the autobooking banner so the user can see, right at
         boot, whether the portal session is valid and whether the Google
         Calendar integration is active (a live token test, not just presence).
         """

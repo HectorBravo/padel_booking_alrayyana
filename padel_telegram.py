@@ -487,7 +487,7 @@ class PadelBot:
             return
         _log("[telegram] no live session at startup - running an automatic "
              "login (OTP read from Gmail)...")
-        self._notify("No live session at startup - I am logging in automatically now.")
+        self._notify("⚠️ No live session at startup - I am logging in automatically now.")
         since = time.time()
         try:
             login_start(self.cfg)

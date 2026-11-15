@@ -641,6 +641,10 @@ class PadelBot:
             {"text": "✏️ New", "callback_data": "gc:new_cal"},
         ]]}
 
+    def gc_cfg_calendar(self, cfg: dict) -> str:
+        """The currently configured calendar name (default 'default')."""
+        return cfg.get("google_calendar", {}).get("calendar", "default") or "default"
+
     def _gcal_prefill_calendar(self, chat_id: int, email: str,
                                cal: str) -> None:
         """Queue the calendar-default prompt for a re-setup (email already offered)."""
@@ -668,6 +672,7 @@ class PadelBot:
         elif act == "new_email":
             st["action"] = "gcal_email"
             st.setdefault("data", {})["email"] = email
+            st["data"]["_email_was_new"] = True
             self._send(chat_id,
                 "Type the new Google email (e.g. you@gmail.com):")
         elif act == "keep_cal":
@@ -706,12 +711,17 @@ class PadelBot:
             else:
                 data["email"] = text
             self.pending[chat_id] = {"action": "gcal_calendar", "data": data}
-            # The calendar prompt was already sent by the re-setup prefill; only
-            # send it here for the fresh 4-step flow.
+            # Fresh flow: send the text calendar prompt. Re-setup keep_email:
+            # the calendar buttons were already shown by _gcal_prefill_calendar,
+            # so stay silent. Re-setup new_email: we arrived here from typing a
+            # new email (no calendar prompt shown yet), so show the buttons now.
             if not reuse:
                 self._send(chat_id,
                     "Step 2/4: Which calendar should I use?\n"
                     "(e.g. 'Social', 'Work', or leave empty for default)")
+            elif data.get("_email_was_new"):
+                cal = gc_cfg_calendar(self.cfg)
+                self._gcal_prefill_calendar(chat_id, data["email"], cal)
         elif step == "gcal_calendar":
             if not text.strip() and reuse:
                 data.setdefault("calendar", self.cfg.get(

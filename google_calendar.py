@@ -704,11 +704,16 @@ def test_connection(cfg: dict) -> tuple:
         return None, "not configured"
     try:
         from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
         token = gc._get_access_token()
+        # The Calendar API needs timezone-aware RFC3339 times; a naive
+        # datetime.now().isoformat() is rejected with HTTP 400 badRequest.
+        tz = ZoneInfo(gc.timezone)
+        now = datetime.now(tz)
         resp = requests.get(
             f"{CALENDAR_API}/calendars/{gc.calendar_id}/events",
-            params={"timeMin": datetime.now().isoformat(),
-                    "timeMax": (datetime.now() + timedelta(days=7)).isoformat(),
+            params={"timeMin": now.isoformat(),
+                    "timeMax": (now + timedelta(days=7)).isoformat(),
                     "maxResults": 1, "singleEvents": "true"},
             headers=gc._headers(), impersonate="chrome", timeout=20)
         if resp.status_code != 200:

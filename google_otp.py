@@ -315,7 +315,3 @@ def capture_otp(cfg: dict, log=None, since: float | None = None) -> tuple:
            f"{OTP_MAX_RETRIES * OTP_POLL_INTERVAL}s ({reason}).")
     log(f"  -> Gmail: {msg}")
     return "", msg
-
-    """Fetch one message with its payload (headers + body)."""
-    return _gmail_get(f"{GMAIL_API}/messages/{msg_id}", token,
-                      {"format": "full"})

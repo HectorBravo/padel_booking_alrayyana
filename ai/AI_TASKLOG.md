@@ -15,8 +15,8 @@
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
 - **Created**: 15-11-2026 12:45:00
-- **Last Updated**: 15-11-2026 17:40:00
-- **Time Spent**: 1h 5m
+- **Last Updated**: 15-11-2026 20:55:00
+- **Time Spent**: 1h 35m
 - **Branch**: [`main`](https://github.com/HectorBravo/padel_booking_alrayyana)
 - **Commit(s)**: [be1ab95](https://github.com/HectorBravo/padel_booking_alrayyana/commit/be1ab95), [025a028](https://github.com/HectorBravo/padel_booking_alrayyana/commit/025a028), [7d618e1](https://github.com/HectorBravo/padel_booking_alrayyana/commit/7d618e1), [d63005b](https://github.com/HectorBravo/padel_booking_alrayyana/commit/d63005b)
 - **Blockers**: none
@@ -29,6 +29,7 @@
   - **Deploy proof (15-11-2026 17:07)**: connected via PuTTY `plink.exe -batch hbravo@ububu.lan` (Pageant agent). `docker compose up --wait` → Pulled fresh image, Recreated + Started + Healthy. Running container `cf7d029a6017` (Up, 8010->8010): grep confirms `ensure_login`=2, `_ensure_login_startup`=2, `needs_session` gate present. Bot log shows clean boot → autobook booking active (valid session at startup).
   - **Forced-relogin-at-boot proof (15-11-2026 17:11)**: deleted `session.json` from volume `padel-booking_padel-data` (sudo), then `docker compose up --wait`. Boot log: `[telegram] no live session at startup — running an automatic login (OTP read from Gmail)...` → OTP sent → Gmail captured 859064 (expired, stale email) → defensive second `_auto_login` captured fresh 690900 → `Login successful. Session saved` → `✅ session established at startup from Gmail` → autobook started. `session.json` recreated, login-status valid=True. Proves the startup OTP-capture path fires when no session exists.
   - Emoji icons on startup-login messages (commits 025a028, 7d618e1, d63005b): the boot relogin now pushes the SAME user-facing chat messages as /login + _otp_from_gmail, with matching emoji: warning sign on the no-session line, email emoji on Gmail-mentioning lines, green tick on the success line. Verified live on ububu.lan (boot 17:38:20): fresh OTP captured first try, Login successful, session valid=True; running container line 490 shows the warning icon.
+  - **Bug-hunt round (15-11-2026 20:55)**: audited telegram/gcal/otp/booking workflows and fixed + redeployed (each after a 120s CI wait) four bugs on `main`: (a) `setupgoogle` fresh-setup hint was passed as the reply_markup arg instead of text (`11255ad`); (b) re-setup New-email path dead-ended with no calendar prompt - added `_email_was_new` flag + `gc_cfg_calendar` helper to show the calendar buttons (`abe2fd0`); (c) `_gcal_finish_auth` could clobber a named calendar with an empty string - now only overwrites when non-empty (`405d5d3`); (d) earlier this session: `/status` tri-state mislabeled not-configured as broken, and `test_connection` used naive time + gc.email (the always-invalidated HTTP 400 root cause). AST scan confirmed no other `_send` reply_markup misuse. All modules compile; T9 ALL PASS, T17 18/18; live `/status` test_connection = (True, Google Calendar reachable); container Up/Healthy with clean boot log.
 
 ### User Confirmations
 

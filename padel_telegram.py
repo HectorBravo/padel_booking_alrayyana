@@ -296,6 +296,9 @@ class PadelBot:
         # race) so `python padel_booking.py telegram` also autobooks and
         # pushes Telegram notifications (booked / failed / OTP expiry).
         # It can be toggled at runtime with /startautobook & /stopautobook.
+        # First, if there is no live session, establish one automatically so the
+        # bot boots already authenticated (Google OTP read from Gmail).
+        self._ensure_login_startup()
         self._start_autobook()
         # Build a startup message that includes the preferred slots,
         # similar to the /prefs save confirmation.
@@ -466,6 +469,44 @@ class PadelBot:
             self._on_setupgoogle(chat_id)
         else:
             self._send(chat_id, f"Unknown command {cmd}\n\n/help for the list.")
+
+    def _ensure_login_startup(self) -> None:
+        """On startup, establish a session automatically if none is live.
+
+        Runs the same OTP flow the /login path uses — but silently (logged to
+        the console, not pushed to a chat) — so `python padel_booking.py
+        telegram` starts already authenticated when Google is configured. A no-
+        op when a session is already valid or when Google is off (then the
+        autobook re-login / manual /login still cover it).
+        """
+        if is_logged_in(get_session(), self.cfg):
+            return
+        if not google_configured(self.cfg):
+            _log("[telegram] no live session and Google is off — "
+                 "autobooking/manual /login will handle login.")
+            return
+        _log("[telegram] no live session at startup — running an automatic "
+             "login (OTP read from Gmail)...")
+        since = time.time()
+        try:
+            login_start(self.cfg)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            _log(f"[telegram] automatic login could not start: {e}")
+            return
+
+        def _gmail_log(msg: str) -> None:
+            _log(f"[otp-gmail] {msg.strip()}")
+
+        otp, error = capture_otp(self.cfg, log=_gmail_log, since=since)
+        if not otp:
+            _log(f"[telegram] startup login: no OTP from Gmail ({error}); "
+                 "autobooking will retry / user can send /login.")
+            return
+        try:
+            login_finish(self.cfg, otp)
+            _log("[telegram] ✅ session established at startup from Gmail.")
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            _log(f"[telegram] startup login failed to finish: {e}")
 
     def _otp_from_gmail(self, chat_id: int, since: float | None = None) -> bool:
         """Try to finish a pending login with the OTP read from Gmail.

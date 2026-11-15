@@ -490,6 +490,41 @@ def login_finish(cfg: dict, otp: str) -> requests.Session:
     return s
 
 
+def ensure_login(cfg: dict) -> bool:
+    """Make sure there is a live authenticated session, logging in if needed.
+
+    Called at program start so the bot/CLI never dead-ends on an expired or
+    missing session. If already logged in it returns immediately. Otherwise —
+    when the Google integration is configured — it runs the whole OTP flow by
+    itself (login_start → read the OTP from Gmail → login_finish), exactly like
+    the manual `login-start` + `login-finish` pair, so nothing needs to be typed.
+
+    Returns True when a valid session exists at the end. When Google is NOT
+    configured it cannot fetch the OTP silently, so it leaves the existing
+    behaviour intact (returns False; callers fall back to prompting/asking).
+    """
+    if is_logged_in(get_session(), cfg):
+        return True
+    if not google_configured(cfg):
+        return False
+    print("  -> No live session: starting an automatic login "
+          "(OTP will be read from Gmail)...")
+    try:
+        login_start(cfg)          # phase 1; also auto-finishes via _auto_login
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        print(f"  -> Automatic login could not start: {e}")
+        return False
+    # login_start already tries the Gmail capture internally, but be defensive:
+    # if the session still isn't valid, finish it explicitly from Gmail.
+    if is_logged_in(get_session(), cfg):
+        return True
+    if _auto_login(cfg):
+        return True
+    print("  -> Could not establish a session automatically "
+          "(no OTP email arrived); falling back to manual login.")
+    return False
+
+
 def get_authenticated_session(cfg: dict) -> requests.Session:
     """Return a valid authenticated session (shared, keep-alive), prompting
     to re-login if needed."""
@@ -2974,6 +3009,15 @@ def main() -> None:
     cfg = load_config()
     cmd = sys.argv[1]
     args = sys.argv[2:]
+    # On start, if a portal action is requested but there is no live session,
+    # establish one automatically (login_start → Gmail OTP → login_finish) so the
+    # user never has to run the two-step login manually. Skipped for the login/
+    # google commands (they manage their own auth) and `telegram` (it self-heals
+    # via its autobook re-login).
+    needs_session = cmd in ("explore", "window", "slots", "book", "pick",
+                            "mybookings", "cancel", "autobook", "keepalive")
+    if needs_session:
+        ensure_login(cfg)
     if cmd == "login-start":
         cmd_login_start(cfg)
     elif cmd == "login-finish":

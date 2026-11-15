@@ -4,6 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 15-11-2026 23:40:00 | [T22: Startup UX — rocket Bot-started message + console logs for session/google/slots](#task-t22-startup-ux--rocket-bot-started-message--console-logs-for-sessiongoogleslots) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 15m | none |
 | 15-11-2026 23:05:00 | [T21: setupgoogle flow — email, then auth, then pick from real calendar list](#task-t21-setupgoogle-flow--email-then-auth-then-pick-from-real-calendar-list) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 25m | none |
 | 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |
 | 13-11-2026 19:52:03 | [T19: setupgoogle defaults, /status Google test, stop retrying booked days](#task-t19-setupgoogle-defaults-status-google-test-stop-retrying-booked-days) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 35m | none |
@@ -11,7 +12,39 @@
 | 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m | none (live proof awaits Google re-auth) |
 | 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 12m | none |
 
-## Task T21: setupgoogle flow — email, then auth, then pick from real calendar list
+## Task T22: Startup UX — rocket Bot-started message + console logs for session/google/slots
+
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
+- **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
+- **Created**: 15-11-2026 23:40:00
+- **Last Updated**: 15-11-2026 23:55:00
+- **Time Spent**: 15m
+- **Branch**: [`main`](https://github.com/HectorBravo/padel_booking_alrayyana)
+- **Commit(s)**: [06f7049](https://github.com/HectorBravo/padel_booking_alrayyana/commit/06f7049), [3283b17](https://github.com/HectorBravo/padel_booking_alrayyana/commit/3283b17)
+- **Blockers**: none
+- **Findings & Notes**:
+  - `run()` now sends `self._notify("🚀 Bot started.")` right after the command menu is set — the first chat message at boot (before login/status/banner).
+  - `_startup_status()` now also writes console (`_log`) lines: portal session valid/invalid, and Google active / not-configured / configured-but-not-active. The run() banner block logs the desired booking timeslots (or "no preferred slots").
+  - Deployed on ububu.lan after a 120s CI wait; live boot log shows: `startup: portal session is valid.` / `startup: Google Calendar active (sync + OTP reading on).` / `startup: desired booking timeslots -> sunday: 19:00, 20:00, 21:00; tuesday: 20:00, 19:00, 21:00`. Container Up/Healthy.
+
+### User Confirmations
+
+**Confirmed (user provided):**
+
+- (15-11-2026 23:40:00) "Indicate at startup with a Bot started message + rocket emoji; also log session/google/timeslots to the docker console" → implemented.
+
+### Subtasks / Plan
+
+- [x] Add 🚀 Bot started notify at start of run() (`06f7049`)
+- [x] Add _log lines for session/google in `_startup_status` + timeslots in run() banner (`3283b17`)
+
+### Full Context Notes for AI Agents
+
+> Startup chat order in `run()` (padel_telegram.py ~line 296+): 🚀 Bot started → `_ensure_login_startup()` → `_startup_status()` (session + google, now also _log'd) → `_start_autobook()` → Padel-bot-started banner (+ timeslots _log). Console log prefix is `[telegram] startup: ...`. Verified live on ububu.lan.
+
+---
+
+
 
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>

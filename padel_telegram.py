@@ -624,7 +624,8 @@ class PadelBot:
         self._send(chat_id,
             "📅 Google Calendar Setup\n"
             "--------------------\n"
-            "Step 1/4: What is your Google email?","(the account that owns the calendar)")
+            "Step 1/4: What is your Google email?\n"
+            "(the account that owns the calendar)")
 
     def _gcal_email_keyboard(self, email: str) -> dict:
         """Buttons for the re-setup email step: keep current, or start New."""

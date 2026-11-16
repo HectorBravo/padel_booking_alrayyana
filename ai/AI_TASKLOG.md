@@ -4,7 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 16-11-2026 07:51:02 | [T23: /login stopped working — swallowed by the auto-started Google setup flow](#task-t23-login-stopped-working--swallowed-by-the-auto-started-google-setup-flow) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 0/5 | 0m | none |
+| 16-11-2026 07:51:02 | [T23: /login stopped working — swallowed by the auto-started Google setup flow](#task-t23-login-stopped-working--swallowed-by-the-auto-started-google-setup-flow) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 44m | none |
 | 15-11-2026 23:40:00 | [T22: Startup UX — rocket Bot-started message + console logs for session/google/slots](#task-t22-startup-ux--rocket-bot-started-message--console-logs-for-sessiongoogleslots) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 15m | none |
 | 15-11-2026 23:05:00 | [T21: setupgoogle flow — email, then auth, then pick from real calendar list](#task-t21-setupgoogle-flow--email-then-auth-then-pick-from-real-calendar-list) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 25m | none |
 | 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |
@@ -18,10 +18,10 @@
 - **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 16-11-2026 07:51:02
-- **Last Updated**: 16-11-2026 07:51:02
-- **Time Spent**: 0m
+- **Last Updated**: 16-11-2026 08:35:00
+- **Time Spent**: 44m
 - **Branch**: [`fix/ai-login-blocked-by-stale-setup-flow`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-login-blocked-by-stale-setup-flow)
-- **Commit(s)**: pending
+- **Commit(s)**: [344686b](https://github.com/HectorBravo/padel_booking_alrayyana/commit/344686bfba31673f95757cc19514fc7f861acc7d) (code), [42a2421](https://github.com/HectorBravo/padel_booking_alrayyana/commit/42a2421be9307a37c0a24fd44dd6e1dd9c2f4665) (log, on `main`) — [PR #13](https://github.com/HectorBravo/padel_booking_alrayyana/pull/13)
 - **Blockers**: none
 - **Findings & Notes**:
   - **Root cause**: `_startup_status()` (added in `3e64f44`, made interactive by `3fca3b1`) called `self._on_setupgoogle(chat_ids[0])` at boot whenever Google was configured but its token was dead. That leaves `pending[chat] = {action: "gcal_email"}` waiting for an answer **forever**. `_on_message` routed *every* text through the pending-flow branch before the `/command` dispatch, so the user's next `/login` was fed to the email validator → "That doesn't look like an email." and `_on_login` never ran. /login looked broken; it was unreachable.
@@ -42,11 +42,11 @@
 
 ### Subtasks / Plan
 
-- [ ] Slash commands bypass the pending Google-setup flow + clear stale state
-- [ ] Startup offers re-setup as a button instead of auto-opening the flow
-- [ ] `_otp_from_gmail` succeeds when the session is already authenticated
-- [ ] New T23 suite + T17/T9 regressions green
-- [ ] Commit/push on the AI branch
+- [x] Slash commands bypass the pending Google-setup flow + clear stale state
+- [x] Startup offers re-setup as a button instead of auto-opening the flow
+- [x] `_otp_from_gmail` succeeds when the session is already authenticated
+- [x] New T23 suite + T17/T9 regressions green (7/7, 18/18, ALL PASS)
+- [x] Commit/push on the AI branch (`344686b`) + PR #13 opened against `main`
 
 ### Full Context Notes for AI Agents
 

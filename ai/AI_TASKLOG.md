@@ -4,7 +4,6 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 16-11-2026 15:18:34 | [T24: OTP login fails with a correctly captured OTP (finishable pending stub)](#task-t24-otp-login-fails-with-a-correctly-captured-otp-finishable-pending-stub) | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">blocked</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/6 | 40m | SSH push auth (Pageant not running) |
 | 15-11-2026 23:40:00 | [T22: Startup UX — rocket Bot-started message + console logs for session/google/slots](#task-t22-startup-ux--rocket-bot-started-message--console-logs-for-sessiongoogleslots) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 15m | none |
 | 15-11-2026 23:05:00 | [T21: setupgoogle flow — email, then auth, then pick from real calendar list](#task-t21-setupgoogle-flow--email-then-auth-then-pick-from-real-calendar-list) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 25m | none |
 | 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |
@@ -15,19 +14,19 @@
 
 ## Task T24: OTP login fails with a correctly captured OTP (finishable pending stub)
 
-- **Status**: <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">blocked</span>
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 16-11-2026 15:18:34
-- **Last Updated**: 16-11-2026 15:58:00
-- **Time Spent**: 40m
-- **Branch**: [`fix/ai-login-pending-stub-and-otp-reuse`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-login-pending-stub-and-otp-reuse) (local only — push blocked, see below)
-- **Commit(s)**: [735fea9](https://github.com/HectorBravo/padel_booking_alrayyana/commit/735fea9) (task log), [46a513a](https://github.com/HectorBravo/padel_booking_alrayyana/commit/46a513a) (code + tests) — **not yet pushed**
-- **Blockers**: SSH push authentication. See "Blocked on push" below.
+- **Last Updated**: 16-11-2026 15:54:58
+- **Time Spent**: 46m
+- **Branch**: [`fix/ai-login-pending-stub-and-otp-reuse`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-login-pending-stub-and-otp-reuse) (pushed to `main` directly by the user, branch deleted)
+- **Commit(s)**: [46a513a](https://github.com/HectorBravo/padel_booking_alrayyana/commit/46a513a) (code + tests), on top of [735fea9](https://github.com/HectorBravo/padel_booking_alrayyana/commit/735fea9) (task log before push) — both now on `main`
+- **Blockers**: none
 - **Findings & Notes**:
   - The live `pending_login.json` was the smoking gun: `cookies: []` and **every** `otp_fields` value empty, with a fresh timestamp. That state can only be written by `login_start` (its one `PENDING_FILE.write_text`) — meaning it reached the "checkOtp" URL branch but parsed an OTP form that was not there.
   - A pending record like that can **never** be finished: `verifyOtp` answers `"3"` (invalid) for any code, so the user sees "it can't login with a correctly captured OTP".
   - Second defect: `login_start` already auto-finishes internally (`_auto_login`), yet all three Telegram callers capture + verify **again**. The portal's OTP is single-use, so the second attempt fails.
-  - **Blocked on push**: this repo authenticates over SSH via `core.sshCommand = 'D:\Archivos de programa\Putty\plink.exe' -agent`, i.e. it needs **Pageant** running with a key loaded. Pageant is not running and the OpenSSH `ssh-agent` has no identities; the available keys (`D:\Repos\configs\ssh\hector.bravo_openssh.ppk`, etc.) are passphrase-protected, so Pageant cannot load them non-interactively (it blocks on a prompt). The commits exist locally on the AI branch; pushing needs the user to start Pageant and add the key (or run `git push -u origin fix/ai-login-pending-stub-and-otp-reuse` themselves).
+  - **Delivered (16-11-2026 15:54)**: the user pushed the branch's commits straight to `main` (fast-forward; `origin/main` = `af8a45a`), so there was no PR/merge commit. Post-push on `main`: compile OK, T24 4/4, T23 7/7, T17 18/18, T9 ALL PASS (all exit 0). Branch deleted locally and on the remote.
 
 ### User Confirmations
 
@@ -46,7 +45,7 @@
 - [x] Subtask 3 — `login_finish`: a stale/empty-field pending record now fails with the real cause and clears itself, instead of blaming a correct code with "OTP invalid".
 - [x] Subtask 4 — `login_start` returns True when the login is already complete; the three Telegram callers (`_on_login`, `_ensure_login_startup`, `_relogin`) stop re-capturing / re-verifying (single-use OTP).
 - [x] Subtask 5 — Fix the unrealistic fixture in `ai/verify_t17_otp_capture.py` (empty OTP page) that my new validation correctly rejected; suite now exits 0.
-- [ ] Subtask 6 — Commit + push the AI branch, open PR, merge to `main`, delete the branch, final log commit. **Blocked**: commits are made locally (`735fea9` log, `46a513a` code); pushing needs Pageant running with a loaded key (see Findings). Once auth works: `git push -u origin fix/ai-login-pending-stub-and-otp-reuse`, open PR → merge → delete branch → final log commit on `main`.
+- [x] Subtask 6 — Committed (`735fea9` log, `46a513a` code); the user pushed to `main` directly, branch deleted. Final log commit follows on `main`.
 
 ### Full Context Notes for AI Agents
 
@@ -77,9 +76,9 @@
 
 **Verification suite**: `ai/verify_t24_otp_single_use.py` (4 checks; prints + exit code; no network — patches `new_session`, `_timed`, `PENDING_FILE`, `capture_otp`, `is_logged_in`, `save_session`, `install_session`, `_STATE`). Check 1a reproduces the production stub shape. Before fix: check1a FAIL (3/4). After: 4/4.
 
-**Current state**: code fixed; all suites green — T24 4/4, T23 7/7, T17 18/18 (exit 0), T9 ALL PASS; `py_compile` + import OK for all modules. Working tree on `fix/ai-login-pending-stub-and-otp-reuse`: `padel_booking.py`, `padel_telegram.py`, `ai/verify_t17_otp_capture.py` modified; `ai/verify_t24_otp_single_use.py` added.
+**Current state**: DONE and on `main`. All suites green — T24 4/4, T23 7/7, T17 18/18 (exit 0), T9 ALL PASS; `py_compile` + import OK for all modules. `origin/main` = `af8a45a`; the fix is `46a513a`.
 
-**Next step**: Subtask 6 — commit (log first, then code), push with `-u`, PR → merge → delete branch → final log commit on `main`.
+**Next step**: none for the code. Deploy proof still pending — after the CI image rebuilds, redeploy on the production host (`docker compose pull && docker compose up -d`) and confirm `/login` with Google configured completes in one pass (no "OTP invalid"), and that `pending_login.json` never again appears with empty `otp_fields`.
 
 **Constraints / gotchas**
 - Git identity: `GIT_AUTHOR_NAME="AI_bot"` + `GIT_COMMITTER_NAME="AI_bot"` only; never set email env vars or touch `git config`. Log commits: `docs(ai): [ai] ...` pushed to the user's current branch (`main`). `[ai]` tag after the colon in every commit.
@@ -404,7 +403,7 @@
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m | none |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
 
-> ✅ **17 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **18 completed task(s)** — [View completed tasks](#completed-tasks)
 
 ---
 
@@ -1373,6 +1372,7 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
+| 16-11-2026 15:18:34 | [T24: OTP login fails with a correctly captured OTP (finishable pending stub)](#task-t24-otp-login-fails-with-a-correctly-captured-otp-finishable-pending-stub) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 6/6 | 46m |
 | 16-11-2026 07:51:02 | [T23: /login stopped working — swallowed by the auto-started Google setup flow](#task-t23-login-stopped-working--swallowed-by-the-auto-started-google-setup-flow) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 1h 2m |
 | 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m |
 | 11-11-2026 02:50:02 | [T15: Merge every AI branch into main and delete them](#task-t15-merge-every-ai-branch-into-main-and-delete-them) | <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span> | 5/5 | 4m |

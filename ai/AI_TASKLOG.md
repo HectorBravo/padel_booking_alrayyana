@@ -4,7 +4,6 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 16-11-2026 16:05:49 | [T25: /login should also confirm the Google integration state](#task-t25-login-should-also-confirm-the-google-integration-state) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/4 | 10m | none |
 | 15-11-2026 23:40:00 | [T22: Startup UX — rocket Bot-started message + console logs for session/google/slots](#task-t22-startup-ux--rocket-bot-started-message--console-logs-for-sessiongoogleslots) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 15m | none |
 | 15-11-2026 23:05:00 | [T21: setupgoogle flow — email, then auth, then pick from real calendar list](#task-t21-setupgoogle-flow--email-then-auth-then-pick-from-real-calendar-list) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 25m | none |
 | 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |
@@ -15,18 +14,20 @@
 
 ## Task T25: /login should also confirm the Google integration state
 
-- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
 - **Created**: 16-11-2026 16:05:49
-- **Last Updated**: 16-11-2026 16:05:49
-- **Time Spent**: 10m
-- **Branch**: [`feat/ai-login-reports-google-status`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/feat/ai-login-reports-google-status)
-- **Commit(s)**: pending
+- **Last Updated**: 16-11-2026 16:22:57
+- **Time Spent**: 17m
+- **Branch**: [`feat/ai-login-reports-google-status`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/feat/ai-login-reports-google-status) (merged into `main`, branch deleted)
+- **Commit(s)**: [0443aa1](https://github.com/HectorBravo/padel_booking_alrayyana/commit/0443aa1b9f69062cc42c0a8c57406752ad70c64d) (code + tests), on top of [8114969](https://github.com/HectorBravo/padel_booking_alrayyana/commit/8114969) (task log) — merged via [PR #14](https://github.com/HectorBravo/padel_booking_alrayyana/pull/14) as a fast-forward
 - **Blockers**: none
 - **Findings & Notes**:
   - After [T24](#task-t24-otp-login-fails-with-a-correctly-captured-otp-finishable-pending-stub), `/login` prints only "✅ Login successful — session saved." The user could not tell whether Calendar sync + Gmail OTP reading are alive, unlike at boot where `_startup_status()` reports them.
   - Added `PadelBot._google_status_line()`: runs the same live `test_connection(cfg)` check as boot and returns one line for all three states (active / not configured / configured-but-dead). Appended to both login-success messages (`_on_login` fast path, `_otp_from_gmail` already-authenticated path).
   - Deliberately NOT added to `_ensure_login_startup`: `_startup_status()` already reports Google at boot, so it would duplicate.
+  - **Merged (16-11-2026 16:22)** via [PR #14](https://github.com/HectorBravo/padel_booking_alrayyana/pull/14) as a **fast-forward** (`origin/main` = `0443aa1`, no merge commit). Post-merge on `main`: compile OK, T25 5/5, T24/T23/T17/T9 all exit 0. Branch deleted locally and on the remote.
+  - **Not yet deployed** — redeploy after the CI image rebuild and confirm `/login` replies with both lines (session saved + Google Calendar active).
 
 ### User Confirmations
 
@@ -43,7 +44,7 @@
 - [x] Subtask 1 — `PadelBot._google_status_line()` mirroring `_startup_status` wording for all three Google states.
 - [x] Subtask 2 — Append it to the `/login` success message and the `_otp_from_gmail` already-authenticated success message.
 - [x] Subtask 3 — `ai/verify_t25_login_google_status.py` (5 checks): all three states, `/login` fast path, `_otp_from_gmail` path. Regressions: T24/T23/T17/T9 all exit 0.
-- [ ] Subtask 4 — Commit + push the branch, merge to `main`, delete the branch, final log commit.
+- [x] Subtask 4 — Committed (`8114969` log, `0443aa1` code), pushed with `-u`, merged via [PR #14](https://github.com/HectorBravo/padel_booking_alrayyana/pull/14) (fast-forward), branch deleted locally + remote. Final log commit follows on `main`.
 
 ### Full Context Notes for AI Agents
 
@@ -59,9 +60,14 @@
 
 **Test**: `ai/verify_t25_login_google_status.py` — `BotStub(pt.PadelBot)` with `_send` captured (same pattern as `verify_t23_login_not_blocked.py`); patches `pt.test_connection`, `pt.login_start`, `pt.capture_otp`, `pt.is_logged_in`, `pt.get_session`. 5/5 pass.
 
-**Current state**: code + tests done, all suites green (T25 5/5, T24, T23, T17, T9 exit 0), compile + import OK. On branch `feat/ai-login-reports-google-status`; changes: `padel_telegram.py` modified, `ai/verify_t25_login_google_status.py` added. Nothing committed yet.
+**Current state**: DONE and on `main` (fast-forward merge of PR #14; `origin/main` = the code commit, plus this final log commit). All suites green — T25 5/5, T24/T23/T17/T9 exit 0; compile + import OK.
 
-**Next step**: Subtask 4 — commit log first (`docs(ai): [ai] ...`), then code (`feat(telegram): [ai] ...`), push with `-u`, PR → merge → delete branch → final log commit on `main`. Note: the user sometimes pushes to `main` directly; if so, verify `origin/main` contains the commits before deleting the local branch.
+**Next step**: none for the code. Deploy proof pending — after the CI image rebuilds, `docker compose pull && docker compose up -d` on the production host and confirm `/login` answers with both lines:
+
+```
+✅ Login successful — session saved.
+📅 Google Calendar active - sync and OTP reading are on.
+```
 
 **Constraints**: same git identity rules as T24 (`AI_bot` name via env vars + `--author`, never touch `git config`, `[ai]` tag). `config.json`/`session.json`/`pending_login.json` are gitignored.
 
@@ -459,7 +465,7 @@
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m | none |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
 
-> ✅ **18 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **19 completed task(s)** — [View completed tasks](#completed-tasks)
 
 ---
 
@@ -1428,6 +1434,7 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
+| 16-11-2026 16:05:49 | [T25: /login should also confirm the Google integration state](#task-t25-login-should-also-confirm-the-google-integration-state) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 17m |
 | 16-11-2026 15:18:34 | [T24: OTP login fails with a correctly captured OTP (finishable pending stub)](#task-t24-otp-login-fails-with-a-correctly-captured-otp-finishable-pending-stub) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 6/6 | 46m |
 | 16-11-2026 07:51:02 | [T23: /login stopped working — swallowed by the auto-started Google setup flow](#task-t23-login-stopped-working--swallowed-by-the-auto-started-google-setup-flow) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 1h 2m |
 | 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m |

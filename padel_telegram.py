@@ -435,14 +435,26 @@ class PadelBot:
                                     "email (or /login to restart).")
             return
 
-        # Pending Google Calendar setup flow
+        # Pending Google Calendar setup flow.
+        # A slash command is NEVER flow input: the setup flow can sit open for a
+        # long time (it used to be auto-started at boot when the Google token was
+        # dead), and swallowing "/login" here made /login look broken — it never
+        # reached _on_login. Only plain text is an answer to the flow.
         gc_state = self.pending.get(chat_id, {}).get("action")
         if gc_state and gc_state.startswith("gcal_"):
-            self._on_gcal_setup(chat_id, gc_state, text)
-            return
+            if not text.startswith("/"):
+                self._on_gcal_setup(chat_id, gc_state, text)
+                return
 
         if not text.startswith("/"):
             return
+
+        # Any command abandons an in-progress Google setup, so the stale state
+        # cannot interfere with later messages (send /setupgoogle to start over).
+        if gc_state and gc_state.startswith("gcal_"):
+            self.pending.pop(chat_id, None)
+            self._send(chat_id, "Google setup cancelled — send /setupgoogle "
+                                "to start it again.")
 
         parts = text.split()
         cmd = parts[0].split("@")[0].lower()   # strip any @botname, lowercase
@@ -540,14 +552,15 @@ class PadelBot:
             self._notify("📅 Google Calendar not configured - booking still works; send /setupgoogle to enable sync + auto-OTP.")
         else:
             # Configured but the token/access is dead (e.g. revoked or expired).
-            # Do not just warn - kick off the interactive re-setup so the user can
-            # fix it in one tap, exactly as if they had sent /setupgoogle.
-            _log(f"[telegram] startup: Google Calendar configured but NOT active ({gdetail}); starting re-setup.")
-            self._notify(f"⚠️ Google Calendar configured but NOT active: {gdetail}. Starting the setup so you can re-authorize...")
-            if self.chat_ids:
-                self._on_setupgoogle(self.chat_ids[0])
-            else:
-                self._notify("No chat to prompt - send /setupgoogle to fix.")
+            # Tell the user and offer the one-tap fix, but do NOT open the
+            # interactive setup on their behalf: it leaves `pending[chat]` waiting
+            # for an answer at boot, and anyone who then sends a command instead
+            # of answering gets stuck in a flow they never asked for. /setupgoogle
+            # (or the button below) starts it deliberately.
+            _log(f"[telegram] startup: Google Calendar configured but NOT active ({gdetail}); offering re-setup.")
+            self._notify(f"⚠️ Google Calendar configured but NOT active: {gdetail}. "
+                         f"Send /setupgoogle to re-authorize.",
+                         self._gcal_fix_keyboard())
 
 
     def _otp_from_gmail(self, chat_id: int, since: float | None = None) -> bool:
@@ -570,6 +583,14 @@ class PadelBot:
 
         otp, error = capture_otp(self.cfg, log=_gmail_log, since=since)
         if not otp:
+            # The portal may already have authenticated this session inside
+            # login_start ("Already authenticated"), in which case there is no
+            # OTP to wait for and no pending_login.json to finish from. Check
+            # that before falling back, or /login dead-ends asking the user for
+            # a code that will never validate.
+            if is_logged_in(get_session(), self.cfg):
+                self._send(chat_id, "✅ Login successful — session saved.")
+                return True
             self._send(chat_id, f"⚠️ I could not read the OTP from Gmail: "
                                 f"{error}\n\nReply here with the 6-digit code "
                                 f"from your email (or /login to restart).")
@@ -641,6 +662,12 @@ class PadelBot:
             {"text": "✏️ New", "callback_data": "gc:new_email"},
         ]]}
 
+    def _gcal_fix_keyboard(self) -> dict:
+        """One-tap 'start the setup' button offered when the token is dead."""
+        return {"inline_keyboard": [[
+            {"text": "🔧 Fix Google setup", "callback_data": "gc:start"},
+        ]]}
+
     def _gcal_after_email(self, chat_id: int, data: dict) -> None:
         """Email is settled — move to the OAuth step (client pair or auth)."""
         gc = self.cfg.get("google_calendar", {})
@@ -695,12 +722,17 @@ class PadelBot:
 
     def _on_gcal_callback(self, chat_id: int, data: str) -> None:
         """Route the Google-setup inline-button callbacks (gc:*)."""
+        act = data[3:]  # strip gc:
+        if act == "start":
+            # Offered by the startup warning when the token is dead: starts the
+            # flow deliberately, from a tap, instead of opening it unasked.
+            self._on_setupgoogle(chat_id)
+            return
         st = self.pending.get(chat_id, {})
         if not st.get("action", "").startswith("gcal_"):
             self._send(chat_id, "No Google setup in progress - send /setupgoogle.")
             return
         d = st.get("data", {})
-        act = data[3:]  # strip gc:
         gc = self.cfg.get("google_calendar", {})
         email = d.get("email", gc.get("email", ""))
         if act == "keep_email":
@@ -1432,11 +1464,11 @@ class PadelBot:
                                 f"portal's error).{window}")
 
     # ---- background autobooking (keep-alive + booking race) -------------- #
-    def _notify(self, text: str) -> None:
+    def _notify(self, text: str, reply_markup: dict | None = None) -> None:
         """Broadcast a notification to all whitelisted chats (never raises)."""
         for chat in self.chat_ids:
             try:
-                self.api.send_message(chat, text)
+                self.api.send_message(chat, text, reply_markup)
             except TelegramError as e:
                 _log(f"[telegram] notify {chat} failed: {e}")
 

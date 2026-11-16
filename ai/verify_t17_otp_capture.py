@@ -255,6 +255,7 @@ import padel_telegram as pt  # noqa: E402
 class BotStub(pt.PadelBot):
     def __init__(self, cfg):          # bypass the real Telegram setup
         self.cfg = cfg
+        self.chat_ids = [1]           # _otp_from_gmail may probe the session
         self.pending = {}
         self.sent = []
 
@@ -269,7 +270,8 @@ def tg_case(name, otp, error, expect_pending):
     with patch.object(pt, "capture_otp",
                       lambda cfg, log=None, since=None: (otp, error)), \
          patch.object(pt, "login_finish", lambda cfg, o: None), \
-         patch.object(pt, "login_start", lambda cfg: None):
+         patch.object(pt, "login_start", lambda cfg: None), \
+         patch.object(pt, "is_logged_in", lambda s, cfg: False):
         finished = bot._otp_from_gmail(1)
         if not finished:                      # mirrors _on_login's fallback
             bot.pending[1] = {"action": "otp"}

@@ -4,6 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 16-11-2026 16:05:49 | [T25: /login should also confirm the Google integration state](#task-t25-login-should-also-confirm-the-google-integration-state) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/4 | 10m | none |
 | 15-11-2026 23:40:00 | [T22: Startup UX — rocket Bot-started message + console logs for session/google/slots](#task-t22-startup-ux--rocket-bot-started-message--console-logs-for-sessiongoogleslots) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 15m | none |
 | 15-11-2026 23:05:00 | [T21: setupgoogle flow — email, then auth, then pick from real calendar list](#task-t21-setupgoogle-flow--email-then-auth-then-pick-from-real-calendar-list) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 25m | none |
 | 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |
@@ -12,7 +13,62 @@
 | 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m | none (live proof awaits Google re-auth) |
 | 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 12m | none |
 
+## Task T25: /login should also confirm the Google integration state
+
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
+- **Created**: 16-11-2026 16:05:49
+- **Last Updated**: 16-11-2026 16:05:49
+- **Time Spent**: 10m
+- **Branch**: [`feat/ai-login-reports-google-status`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/feat/ai-login-reports-google-status)
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - After [T24](#task-t24-otp-login-fails-with-a-correctly-captured-otp-finishable-pending-stub), `/login` prints only "✅ Login successful — session saved." The user could not tell whether Calendar sync + Gmail OTP reading are alive, unlike at boot where `_startup_status()` reports them.
+  - Added `PadelBot._google_status_line()`: runs the same live `test_connection(cfg)` check as boot and returns one line for all three states (active / not configured / configured-but-dead). Appended to both login-success messages (`_on_login` fast path, `_otp_from_gmail` already-authenticated path).
+  - Deliberately NOT added to `_ensure_login_startup`: `_startup_status()` already reports Google at boot, so it would duplicate.
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+- None yet.
+
+**Confirmed (user provided):**
+
+- (16-11-2026 16:03:00) "What do you see / expect?" → "I see 'login successful - session saved'. But I'd expect to get also the confirmation that the google integration is also ok as when the program starts"
+
+### Subtasks / Plan
+
+- [x] Subtask 1 — `PadelBot._google_status_line()` mirroring `_startup_status` wording for all three Google states.
+- [x] Subtask 2 — Append it to the `/login` success message and the `_otp_from_gmail` already-authenticated success message.
+- [x] Subtask 3 — `ai/verify_t25_login_google_status.py` (5 checks): all three states, `/login` fast path, `_otp_from_gmail` path. Regressions: T24/T23/T17/T9 all exit 0.
+- [ ] Subtask 4 — Commit + push the branch, merge to `main`, delete the branch, final log commit.
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: self-contained knowledge base to resume this task without other context.
+
+**Why T24 made this visible**: before T24, `/login` always went through `_otp_from_gmail`, which sends "📥 Google integration is on — reading the OTP from your Gmail…". Now `login_start()` returns True (already authenticated or auto-finished internally) and `/login` short-circuits to a bare success line, so the Google signal disappeared.
+
+**Key code**:
+- `padel_telegram.py:_google_status_line` (~line 615) — new helper; calls `test_connection(self.cfg)` → `(True|False|None, detail)`. `None` means not configured. Never raises (`test_connection` swallows everything).
+- `padel_telegram.py:_startup_status` (:540) — the boot report whose wording is mirrored (kept as the source of the phrasing; not refactored to use the helper because it also `_notify`s with a keyboard on the dead-token case).
+- Success messages updated: `_on_login` `finished_here` branch, `_otp_from_gmail` `is_logged_in` branch. Both do `"✅ Login successful — session saved." + self._google_status_line()`.
+- `google_calendar.test_connection` (:692) — live check: fresh access token + one Calendar list call. Proves refresh-token AND calendar read; Gmail shares the same OAuth grant, so it is a fair proxy for OTP reading.
+
+**Test**: `ai/verify_t25_login_google_status.py` — `BotStub(pt.PadelBot)` with `_send` captured (same pattern as `verify_t23_login_not_blocked.py`); patches `pt.test_connection`, `pt.login_start`, `pt.capture_otp`, `pt.is_logged_in`, `pt.get_session`. 5/5 pass.
+
+**Current state**: code + tests done, all suites green (T25 5/5, T24, T23, T17, T9 exit 0), compile + import OK. On branch `feat/ai-login-reports-google-status`; changes: `padel_telegram.py` modified, `ai/verify_t25_login_google_status.py` added. Nothing committed yet.
+
+**Next step**: Subtask 4 — commit log first (`docs(ai): [ai] ...`), then code (`feat(telegram): [ai] ...`), push with `-u`, PR → merge → delete branch → final log commit on `main`. Note: the user sometimes pushes to `main` directly; if so, verify `origin/main` contains the commits before deleting the local branch.
+
+**Constraints**: same git identity rules as T24 (`AI_bot` name via env vars + `--author`, never touch `git config`, `[ai]` tag). `config.json`/`session.json`/`pending_login.json` are gitignored.
+
+---
+
 ## Task T24: OTP login fails with a correctly captured OTP (finishable pending stub)
+
 
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>

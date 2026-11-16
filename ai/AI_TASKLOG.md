@@ -4,7 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 16-11-2026 15:18:34 | [T24: OTP login fails with a correctly captured OTP (finishable pending stub)](#task-t24-otp-login-fails-with-a-correctly-captured-otp-finishable-pending-stub) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/6 | 40m | none |
+| 16-11-2026 15:18:34 | [T24: OTP login fails with a correctly captured OTP (finishable pending stub)](#task-t24-otp-login-fails-with-a-correctly-captured-otp-finishable-pending-stub) | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">blocked</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/6 | 40m | SSH push auth (Pageant not running) |
 | 15-11-2026 23:40:00 | [T22: Startup UX — rocket Bot-started message + console logs for session/google/slots](#task-t22-startup-ux--rocket-bot-started-message--console-logs-for-sessiongoogleslots) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 15m | none |
 | 15-11-2026 23:05:00 | [T21: setupgoogle flow — email, then auth, then pick from real calendar list](#task-t21-setupgoogle-flow--email-then-auth-then-pick-from-real-calendar-list) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 25m | none |
 | 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |
@@ -15,18 +15,19 @@
 
 ## Task T24: OTP login fails with a correctly captured OTP (finishable pending stub)
 
-- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Status**: <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">blocked</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 16-11-2026 15:18:34
-- **Last Updated**: 16-11-2026 15:18:34
-- **Time Spent**: 0m
-- **Branch**: [`fix/ai-login-pending-stub-and-otp-reuse`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-login-pending-stub-and-otp-reuse)
-- **Commit(s)**: pending
-- **Blockers**: none
+- **Last Updated**: 16-11-2026 15:58:00
+- **Time Spent**: 40m
+- **Branch**: [`fix/ai-login-pending-stub-and-otp-reuse`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-login-pending-stub-and-otp-reuse) (local only — push blocked, see below)
+- **Commit(s)**: [735fea9](https://github.com/HectorBravo/padel_booking_alrayyana/commit/735fea9) (task log), [46a513a](https://github.com/HectorBravo/padel_booking_alrayyana/commit/46a513a) (code + tests) — **not yet pushed**
+- **Blockers**: SSH push authentication. See "Blocked on push" below.
 - **Findings & Notes**:
   - The live `pending_login.json` was the smoking gun: `cookies: []` and **every** `otp_fields` value empty, with a fresh timestamp. That state can only be written by `login_start` (its one `PENDING_FILE.write_text`) — meaning it reached the "checkOtp" URL branch but parsed an OTP form that was not there.
   - A pending record like that can **never** be finished: `verifyOtp` answers `"3"` (invalid) for any code, so the user sees "it can't login with a correctly captured OTP".
   - Second defect: `login_start` already auto-finishes internally (`_auto_login`), yet all three Telegram callers capture + verify **again**. The portal's OTP is single-use, so the second attempt fails.
+  - **Blocked on push**: this repo authenticates over SSH via `core.sshCommand = 'D:\Archivos de programa\Putty\plink.exe' -agent`, i.e. it needs **Pageant** running with a key loaded. Pageant is not running and the OpenSSH `ssh-agent` has no identities; the available keys (`D:\Repos\configs\ssh\hector.bravo_openssh.ppk`, etc.) are passphrase-protected, so Pageant cannot load them non-interactively (it blocks on a prompt). The commits exist locally on the AI branch; pushing needs the user to start Pageant and add the key (or run `git push -u origin fix/ai-login-pending-stub-and-otp-reuse` themselves).
 
 ### User Confirmations
 
@@ -45,7 +46,7 @@
 - [x] Subtask 3 — `login_finish`: a stale/empty-field pending record now fails with the real cause and clears itself, instead of blaming a correct code with "OTP invalid".
 - [x] Subtask 4 — `login_start` returns True when the login is already complete; the three Telegram callers (`_on_login`, `_ensure_login_startup`, `_relogin`) stop re-capturing / re-verifying (single-use OTP).
 - [x] Subtask 5 — Fix the unrealistic fixture in `ai/verify_t17_otp_capture.py` (empty OTP page) that my new validation correctly rejected; suite now exits 0.
-- [ ] Subtask 6 — Commit + push the AI branch, open PR, merge to `main`, delete the branch, final log commit.
+- [ ] Subtask 6 — Commit + push the AI branch, open PR, merge to `main`, delete the branch, final log commit. **Blocked**: commits are made locally (`735fea9` log, `46a513a` code); pushing needs Pageant running with a loaded key (see Findings). Once auth works: `git push -u origin fix/ai-login-pending-stub-and-otp-reuse`, open PR → merge → delete branch → final log commit on `main`.
 
 ### Full Context Notes for AI Agents
 

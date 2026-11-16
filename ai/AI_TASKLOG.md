@@ -4,6 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 16-11-2026 07:51:02 | [T23: /login stopped working — swallowed by the auto-started Google setup flow](#task-t23-login-stopped-working--swallowed-by-the-auto-started-google-setup-flow) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 0/5 | 0m | none |
 | 15-11-2026 23:40:00 | [T22: Startup UX — rocket Bot-started message + console logs for session/google/slots](#task-t22-startup-ux--rocket-bot-started-message--console-logs-for-sessiongoogleslots) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 15m | none |
 | 15-11-2026 23:05:00 | [T21: setupgoogle flow — email, then auth, then pick from real calendar list](#task-t21-setupgoogle-flow--email-then-auth-then-pick-from-real-calendar-list) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 25m | none |
 | 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |
@@ -11,6 +12,57 @@
 | 13-11-2026 19:21:45 | [T18: Make the Google OAuth callback endpoint work (fix the 502)](#task-t18-make-the-google-oauth-callback-endpoint-work-fix-the-502) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 6/6 | 40m | none |
 | 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m | none (live proof awaits Google re-auth) |
 | 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 12m | none |
+
+## Task T23: /login stopped working — swallowed by the auto-started Google setup flow
+
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
+- **Created**: 16-11-2026 07:51:02
+- **Last Updated**: 16-11-2026 07:51:02
+- **Time Spent**: 0m
+- **Branch**: [`fix/ai-login-blocked-by-stale-setup-flow`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-login-blocked-by-stale-setup-flow)
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - **Root cause**: `_startup_status()` (added in `3e64f44`, made interactive by `3fca3b1`) called `self._on_setupgoogle(chat_ids[0])` at boot whenever Google was configured but its token was dead. That leaves `pending[chat] = {action: "gcal_email"}` waiting for an answer **forever**. `_on_message` routed *every* text through the pending-flow branch before the `/command` dispatch, so the user's next `/login` was fed to the email validator → "That doesn't look like an email." and `_on_login` never ran. /login looked broken; it was unreachable.
+  - **Fix 1**: a slash command is never flow input — only plain text answers the Google setup flow. Any command also clears the stale `gcal_*` state so it cannot interfere afterwards.
+  - **Fix 2**: startup no longer opens the interactive setup unasked; it reports the dead token and offers a one-tap 🔧 Fix Google setup button (`gc:start` → `_on_setupgoogle`). The user starts the flow deliberately.
+  - **Fix 3** (second `/login` trap): when `capture_otp` finds nothing, `_otp_from_gmail` fell back to "reply with the code" even when `login_start` had already authenticated the session ("Already authenticated", no `pending_login.json`). It now checks `is_logged_in(get_session(), cfg)` first and reports success.
+  - New suite `ai/verify_t23_login_not_blocked.py` (7 checks) — failed 3/5 before the fix, 7/7 after. Regressions: T17 18/18, T9 ALL PASS. All modules compile + import.
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+- None yet.
+
+**Confirmed (user provided):**
+
+- None yet.
+
+### Subtasks / Plan
+
+- [ ] Slash commands bypass the pending Google-setup flow + clear stale state
+- [ ] Startup offers re-setup as a button instead of auto-opening the flow
+- [ ] `_otp_from_gmail` succeeds when the session is already authenticated
+- [ ] New T23 suite + T17/T9 regressions green
+- [ ] Commit/push on the AI branch
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: self-contained recovery knowledge.
+>
+> - Symptom: `/login` produced no login; user saw the Google-setup email prompt. Reproduced with `ai/verify_t23_login_not_blocked.py` (3/5 FAIL before the fix).
+> - Pending-flow router (`padel_telegram.py:_on_message`, ~line 438): previously `if gc_state.startswith("gcal_"): self._on_gcal_setup(...); return` — it ran **before** `if not text.startswith("/")` and the `cmd == "/login"` dispatch. Now: flow only consumes non-slash text; a slash command pops the `gcal_*` state, sends "Google setup cancelled…", and falls through to normal dispatch. The OTP branch (`action == "otp"`, ~line 410) is untouched — it legitimately consumes digits and already accepts `/login`.
+> - `_startup_status()` (~line 521): the `else` (configured-but-dead token) used to call `_on_setupgoogle(self.chat_ids[0])`. Now sends a warning + `self._gcal_fix_keyboard()` (`{"inline_keyboard":[[{"text":"🔧 Fix Google setup","callback_data":"gc:start"}]]}`). `_notify` gained an optional `reply_markup` arg (~line 1467) so notifications can carry buttons.
+> - `_on_gcal_callback` (~line 723): `act = data[3:]` moved to the top; `gc:start` runs `_on_setupgoogle(chat_id)` **before** the "no setup in progress" guard (that button is pressed with no flow open by design). Other `gc:*` actions unchanged.
+> - `_otp_from_gmail` (~line 583): after `capture_otp` returns no OTP, `if is_logged_in(get_session(), self.cfg): send "✅ Login successful — session saved."; return True`. `is_logged_in` / `get_session` are already module-level imports from `padel_booking`, so both stay patchable.
+> - Harness fix (not a product bug): `ai/verify_t17_otp_capture.py` `BotStub.__init__` needed `self.chat_ids = [1]` and its `tg_case` needed `patch.object(pt, "is_logged_in", lambda s, cfg: False)` — the stub bypasses `PadelBot.__init__`, so the new session probe hit AttributeError / a real network call.
+> - There is **no** `/cancel` bot command (cancellation is inline-keyboard only) and the gcal flow never offered one — an early draft of this fix special-cased "/cancel" as flow input; that was wrong and was removed. Do not reintroduce it.
+> - Verified: `python -m py_compile` on all 4 modules + both suites; `import padel_telegram` OK; T23 7/7, T17 18/18, T9 ALL PASS.
+> - **Next**: commit/push on `fix/ai-login-blocked-by-stale-setup-flow`; after the user merges, write the final `done` log commit on `main`, then `git merge --ff-only origin/main` + `--force-with-lease` re-push of the AI branch. Deploy pattern: wait ~120s for the GitHub Actions image rebuild, then redeploy on ububu.lan and confirm boot log shows `offering re-setup` (not `starting re-setup`) and that `/login` reaches `_on_login`.
+
+---
 
 ## Task T22: Startup UX — rocket Bot-started message + console logs for session/google/slots
 

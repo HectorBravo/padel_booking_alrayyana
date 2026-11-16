@@ -596,7 +596,8 @@ class PadelBot:
             # that before falling back, or /login dead-ends asking the user for
             # a code that will never validate.
             if is_logged_in(get_session(), self.cfg):
-                self._send(chat_id, "✅ Login successful — session saved.")
+                self._send(chat_id, "✅ Login successful — session saved."
+                                    + self._google_status_line())
                 return True
             self._send(chat_id, f"⚠️ I could not read the OTP from Gmail: "
                                 f"{error}\n\nReply here with the 6-digit code "
@@ -611,6 +612,23 @@ class PadelBot:
         self._send(chat_id, f"✅ Login successful — session saved "
                             f"(OTP {otp} read from Gmail).")
         return True
+
+    def _google_status_line(self) -> str:
+        """One-line live Google integration state, same wording as the boot
+        report (`_startup_status`). Login messages use it so a successful login
+        also confirms that Calendar sync + Gmail OTP reading are alive — not
+        just that the portal session was saved."""
+        gok, gdetail = test_connection(self.cfg)
+        if gok is True:
+            _log("[telegram] Google Calendar active (sync + OTP reading on).")
+            return "\n📅 Google Calendar active - sync and OTP reading are on."
+        if gok is None:
+            _log("[telegram] Google Calendar not configured.")
+            return ("\n📅 Google Calendar not configured - booking still works; "
+                    "send /setupgoogle to enable sync + auto-OTP.")
+        _log(f"[telegram] Google Calendar configured but NOT active ({gdetail}).")
+        return (f"\n⚠️ Google Calendar configured but NOT active: {gdetail}. "
+                "Send /setupgoogle to re-authorize.")
 
     def _on_login(self, chat_id: int) -> None:
         """Start the two-step login, then wait for the OTP code here."""
@@ -627,7 +645,8 @@ class PadelBot:
             # by the Gmail capture inside login_start). Capturing and verifying
             # again here would consume the single-use OTP and then fail with
             # "OTP invalid" — which is the false failure being fixed.
-            self._send(chat_id, "✅ Login successful — session saved.")
+            self._send(chat_id, "✅ Login successful — session saved."
+                                + self._google_status_line())
             return
         # With Google configured the OTP never reaches the user: grab it from
         # Gmail ourselves.  Only fall back to waiting for a typed code when

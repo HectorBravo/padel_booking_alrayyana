@@ -404,8 +404,16 @@ def _load_cookies(s: requests.Session, cookies: list) -> None:
         )
 
 
-def login_start(cfg: dict) -> None:
-    """Phase 1: submit credentials, receive the OTP email, stash pending state."""
+def login_start(cfg: dict) -> bool:
+    """Phase 1: submit credentials, receive the OTP email, stash pending state.
+
+    Returns True when the login is already COMPLETE — either the session was
+    authenticated without needing an OTP, or the Gmail OTP capture inside
+    (`_auto_login`) finished it. Callers must then NOT capture or verify again:
+    the portal's OTP is single-use, so a second attempt on the same code answers
+    "invalid"/"expired" and looks like a bad capture. Returns False when a
+    pending login is waiting to be finished (manually or by the caller).
+    """
     # Clean session: stale cookies from a previous (expired) session must not
     # be sent, or the server refuses to establish the new one.
     s = new_session(restore=False)
@@ -423,7 +431,7 @@ def login_start(cfg: dict) -> None:
         if is_logged_in(s, cfg):
             save_session(s)
             print("  -> Already authenticated. Session saved.")
-            return
+            return True
         raise RuntimeError(f"Login did not reach OTP step (url={r.url}, "
                            f"status={r.status_code})")
 
@@ -434,6 +442,23 @@ def login_start(cfg: dict) -> None:
         for k in ("id_user", "phone", "email", "first_name", "last_name",
                   "password", "username", "name_usr")
     }
+
+    # The URL containing "checkOtp" is not proof that the OTP form was served:
+    # when the session is already authenticated Akamai can leave the redirect
+    # chain on /login/checkOtp while the body is the landing page. Parsing that
+    # yields every hidden field empty, and stashing it turns into a pending
+    # login that can NEVER be finished — verifyOtp answers "invalid" for any
+    # code, which looks like "the captured OTP is wrong". Treat an unparseable
+    # page as "no OTP step", i.e. the already-authenticated / failed case.
+    if not otp_fields["id_user"]:
+        if is_logged_in(s, cfg):
+            save_session(s)
+            print("  -> Already authenticated. Session saved.")
+            return True
+        raise RuntimeError(
+            "Login reached the OTP page but no OTP fields were present, so no "
+            f"OTP was sent (url={r.url}, status={r.status_code}). The session "
+            "was most likely already authenticated.")
 
     # stash the pending state (cookies + otp fields) so phase 2 can resume
     state = {
@@ -446,8 +471,9 @@ def login_start(cfg: dict) -> None:
 
     print("  -> OTP sent to your email. Check your inbox.")
     if _auto_login(cfg):
-        return
+        return True
     print("  -> When ready, run: python3 padel_booking.py login-finish <OTP>")
+    return False
 
 
 def login_finish(cfg: dict, otp: str) -> requests.Session:
@@ -456,11 +482,20 @@ def login_finish(cfg: dict, otp: str) -> requests.Session:
         raise RuntimeError("No pending login. Run 'login-start' first.")
     state = json.loads(PENDING_FILE.read_text())
 
+    otp_fields = state["otp_fields"]
+    # A pending record whose hidden fields are empty was never a real OTP step
+    # (see login_start). Saying "OTP invalid" here blames the code, which is
+    # correct — so name the actual cause instead.
+    if not otp_fields.get("id_user"):
+        PENDING_FILE.unlink(missing_ok=True)
+        raise RuntimeError(
+            "The pending login is stale or incomplete (no OTP was actually "
+            "requested). Run 'login-start' again.")
+
     # Clean session (no stale session.json cookies), then apply the pending
     # cookies captured during login_start.
     s = new_session(restore=False)
     _load_cookies(s, state["cookies"])
-    otp_fields = state["otp_fields"]
 
     # verifyOtp (AJAX) -> returns redirect URL, or '2' (expired) / '3' (invalid)
     r2 = _timed("POST", BASE_URL + "/login/verifyOtp",

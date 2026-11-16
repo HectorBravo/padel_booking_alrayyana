@@ -506,10 +506,17 @@ class PadelBot:
         self._notify("⚠️ No live session at startup - I am logging in automatically now.")
         since = time.time()
         try:
-            login_start(self.cfg)
+            finished_here = login_start(self.cfg)
         except Exception as e:  # pylint: disable=broad-exception-caught
             _log(f"[telegram] automatic login could not start: {e}")
             self._notify(f"Could not start the startup login: {e}. Send /login to try again.")
+            return
+        if finished_here:
+            # login_start already completed it (already-authenticated, or its own
+            # Gmail capture). Re-capturing/re-verifying here would burn the
+            # single-use OTP and report a false failure.
+            _log("[telegram] startup login completed by login_start.")
+            self._notify("✅ Login successful - session saved. Autobooking is starting.")
             return
 
         def _gmail_log(msg: str) -> None:
@@ -611,9 +618,16 @@ class PadelBot:
         # after this point counts as THIS login's OTP (never an older one).
         since = time.time()
         try:
-            login_start(self.cfg)
+            finished_here = login_start(self.cfg)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self._send(chat_id, f"❌ Could not start login: {e}")
+            return
+        if finished_here:
+            # The login is already complete (already-authenticated, or finished
+            # by the Gmail capture inside login_start). Capturing and verifying
+            # again here would consume the single-use OTP and then fail with
+            # "OTP invalid" — which is the false failure being fixed.
+            self._send(chat_id, "✅ Login successful — session saved.")
             return
         # With Google configured the OTP never reaches the user: grab it from
         # Gmail ourselves.  Only fall back to waiting for a typed code when
@@ -1487,10 +1501,15 @@ class PadelBot:
         # the fresh re-login's code, never a previous one.
         since = time.time()
         try:
-            login_start(self.cfg)
+            finished_here = login_start(self.cfg)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self._notify(f"❌ Could not start re-login: {e}")
             return False
+        if finished_here:
+            # login_start restored the session itself; capturing and verifying a
+            # second time would consume the single-use OTP and fail spuriously.
+            self._notify("✅ Session restored — autobooking is healthy again.")
+            return True
         # Google configured → read the OTP from Gmail ourselves; the session is
         # restored without bothering anyone.  Otherwise ask the chats to reply.
         if google_configured(self.cfg):

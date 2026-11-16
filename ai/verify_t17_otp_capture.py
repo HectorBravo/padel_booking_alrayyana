@@ -203,7 +203,19 @@ class StartHarness:
         class R:
             url = "https://myportal.asteco.com/login/checkOtp"
             status_code = 200
-            text = "<html></html>"
+            # A real OTP page carries the hidden fields login_start parses and
+            # stashes for phase 2; an empty body would (correctly) be rejected
+            # as "no OTP step".
+            text = ('<html><form>'
+                    '<input name="id_user" value="7"/>'
+                    '<input name="phone" value=""/>'
+                    '<input name="email" value="u@example.com"/>'
+                    '<input name="first_name" value=""/>'
+                    '<input name="last_name" value=""/>'
+                    '<input name="password" value=""/>'
+                    '<input name="username" value=""/>'
+                    '<input name="name_usr" value=""/>'
+                    '</form></html>')
         return R()
 
     def capture(self, cfg, log=None, since=None):

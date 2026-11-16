@@ -4,6 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 16-11-2026 15:18:34 | [T24: OTP login fails with a correctly captured OTP (finishable pending stub)](#task-t24-otp-login-fails-with-a-correctly-captured-otp-finishable-pending-stub) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/6 | 40m | none |
 | 15-11-2026 23:40:00 | [T22: Startup UX — rocket Bot-started message + console logs for session/google/slots](#task-t22-startup-ux--rocket-bot-started-message--console-logs-for-sessiongoogleslots) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 15m | none |
 | 15-11-2026 23:05:00 | [T21: setupgoogle flow — email, then auth, then pick from real calendar list](#task-t21-setupgoogle-flow--email-then-auth-then-pick-from-real-calendar-list) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 25m | none |
 | 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |
@@ -12,7 +13,82 @@
 | 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m | none (live proof awaits Google re-auth) |
 | 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 12m | none |
 
+## Task T24: OTP login fails with a correctly captured OTP (finishable pending stub)
+
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
+- **Created**: 16-11-2026 15:18:34
+- **Last Updated**: 16-11-2026 15:18:34
+- **Time Spent**: 0m
+- **Branch**: [`fix/ai-login-pending-stub-and-otp-reuse`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-login-pending-stub-and-otp-reuse)
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - The live `pending_login.json` was the smoking gun: `cookies: []` and **every** `otp_fields` value empty, with a fresh timestamp. That state can only be written by `login_start` (its one `PENDING_FILE.write_text`) — meaning it reached the "checkOtp" URL branch but parsed an OTP form that was not there.
+  - A pending record like that can **never** be finished: `verifyOtp` answers `"3"` (invalid) for any code, so the user sees "it can't login with a correctly captured OTP".
+  - Second defect: `login_start` already auto-finishes internally (`_auto_login`), yet all three Telegram callers capture + verify **again**. The portal's OTP is single-use, so the second attempt fails.
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+- None yet.
+
+**Confirmed (user provided):**
+
+- None yet.
+
+### Subtasks / Plan
+
+- [x] Subtask 1 — Reproduce with a faithful portal model (`ai/verify_t24_otp_single_use.py`): already-authenticated session whose redirect chain stays on `/login/checkOtp` writes the empty-fields stub → FAIL before fix.
+- [x] Subtask 2 — `login_start`: validate the parsed OTP form (`id_user` present) instead of trusting the URL; treat an unparseable page as "no OTP step" (already-authenticated / clear error). No stub is written.
+- [x] Subtask 3 — `login_finish`: a stale/empty-field pending record now fails with the real cause and clears itself, instead of blaming a correct code with "OTP invalid".
+- [x] Subtask 4 — `login_start` returns True when the login is already complete; the three Telegram callers (`_on_login`, `_ensure_login_startup`, `_relogin`) stop re-capturing / re-verifying (single-use OTP).
+- [x] Subtask 5 — Fix the unrealistic fixture in `ai/verify_t17_otp_capture.py` (empty OTP page) that my new validation correctly rejected; suite now exits 0.
+- [ ] Subtask 6 — Commit + push the AI branch, open PR, merge to `main`, delete the branch, final log commit.
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: self-contained knowledge base to resume this task without other context.
+
+**Symptom**: OTP capture succeeds, but login then reports it can't log in with that (correct) OTP.
+
+**Root cause 1 — finishable-looking pending stub (`padel_booking.py:login_start`)**
+- `login_start` only tested `"checkOtp" not in r.url`. When the browser session is already authenticated, Akamai can keep the redirect chain on `/login/checkOtp` while serving the landing page. Parsing that yields every hidden field empty; the code still wrote `pending_login.json`.
+- Only one writer exists (`PENDING_FILE.write_text`, verified by search), so an all-empty `otp_fields` file proves this path ran. Confirmed against the live file: `{"cookies": [], "otp_fields": {all ""}, "created_at": "2026-11-16T08:55:02"}` with `session.json` written 1s later (the "Already authenticated" branch).
+- Fix: after parsing, `if not otp_fields["id_user"]:` → if `is_logged_in` save + `return True`, else raise a clear RuntimeError. No stub is ever written for a non-OTP page.
+
+**Root cause 2 — misleading error (`padel_booking.py:login_finish`)**
+- Loads the pending record and posts `verifyOtp`; empty `otp_fields` produced `"3"` → "OTP invalid", blaming a correct code.
+- Fix: check `otp_fields.get("id_user")` first; unlink the stale record and raise "The pending login is stale or incomplete (no OTP was actually requested). Run 'login-start' again."
+
+**Root cause 3 — double verification of a single-use OTP**
+- `login_start` ends with `if _auto_login(cfg): return True`, so it already runs `capture_otp` + `login_finish`. Callers re-captured and re-finished:
+  - `padel_telegram.py:_on_login` (~line 618)
+  - `padel_telegram.py:_ensure_login_startup` (~line 509)
+  - `padel_telegram.py:_relogin` (~line 1504)
+- Fix: `login_start` now returns bool (True = complete). Each caller checks it and reports success without re-capturing/verifying.
+- `padel_booking.ensure_login` (:528) was already safe — it tests `is_logged_in(get_session(), cfg)` before its defensive `_auto_login`, so no change needed.
+
+**What was tried that did NOT work**
+- A throwaway probe suggested the OTP must be verified on the *same* TLS/Akamai session (cookie replay looked insufficient). That was a **harness artifact**: the fake `new_session` handed out the same object twice and `_load_cookies` ran after `login_finish`'s own load. Modelled faithfully, cookie replay works — session affinity is NOT the defect; do not chase it.
+- PowerShell swallows Python tracebacks (`2>&1 | Select-Object`, `>file 2>&1` both lose them). Write diagnostics to a file from inside Python instead.
+
+**Verification suite**: `ai/verify_t24_otp_single_use.py` (4 checks; prints + exit code; no network — patches `new_session`, `_timed`, `PENDING_FILE`, `capture_otp`, `is_logged_in`, `save_session`, `install_session`, `_STATE`). Check 1a reproduces the production stub shape. Before fix: check1a FAIL (3/4). After: 4/4.
+
+**Current state**: code fixed; all suites green — T24 4/4, T23 7/7, T17 18/18 (exit 0), T9 ALL PASS; `py_compile` + import OK for all modules. Working tree on `fix/ai-login-pending-stub-and-otp-reuse`: `padel_booking.py`, `padel_telegram.py`, `ai/verify_t17_otp_capture.py` modified; `ai/verify_t24_otp_single_use.py` added.
+
+**Next step**: Subtask 6 — commit (log first, then code), push with `-u`, PR → merge → delete branch → final log commit on `main`.
+
+**Constraints / gotchas**
+- Git identity: `GIT_AUTHOR_NAME="AI_bot"` + `GIT_COMMITTER_NAME="AI_bot"` only; never set email env vars or touch `git config`. Log commits: `docs(ai): [ai] ...` pushed to the user's current branch (`main`). `[ai]` tag after the colon in every commit.
+- `pending_login.json`, `config.json`, `session.json` are gitignored — never commit them.
+- Deploy flow: PR → merge to `main` → `.github/workflows/docker-publish.yml` rebuilds `hecbr/padel-booking-alrayyana` → user runs `docker compose pull && docker compose up -d` on the production host.
+
+---
+
 ## Task T23: /login stopped working — swallowed by the auto-started Google setup flow
+
 
 - **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>

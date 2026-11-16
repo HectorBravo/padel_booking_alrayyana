@@ -4,7 +4,6 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 16-11-2026 07:51:02 | [T23: /login stopped working — swallowed by the auto-started Google setup flow](#task-t23-login-stopped-working--swallowed-by-the-auto-started-google-setup-flow) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 44m | none |
 | 15-11-2026 23:40:00 | [T22: Startup UX — rocket Bot-started message + console logs for session/google/slots](#task-t22-startup-ux--rocket-bot-started-message--console-logs-for-sessiongoogleslots) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 15m | none |
 | 15-11-2026 23:05:00 | [T21: setupgoogle flow — email, then auth, then pick from real calendar list](#task-t21-setupgoogle-flow--email-then-auth-then-pick-from-real-calendar-list) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 25m | none |
 | 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |
@@ -15,13 +14,13 @@
 
 ## Task T23: /login stopped working — swallowed by the auto-started Google setup flow
 
-- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 16-11-2026 07:51:02
-- **Last Updated**: 16-11-2026 08:35:00
-- **Time Spent**: 44m
-- **Branch**: [`fix/ai-login-blocked-by-stale-setup-flow`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-login-blocked-by-stale-setup-flow)
-- **Commit(s)**: [344686b](https://github.com/HectorBravo/padel_booking_alrayyana/commit/344686bfba31673f95757cc19514fc7f861acc7d) (code), [42a2421](https://github.com/HectorBravo/padel_booking_alrayyana/commit/42a2421be9307a37c0a24fd44dd6e1dd9c2f4665) (log, on `main`) — [PR #13](https://github.com/HectorBravo/padel_booking_alrayyana/pull/13)
+- **Last Updated**: 16-11-2026 08:53:30
+- **Time Spent**: 1h 2m
+- **Branch**: [`fix/ai-login-blocked-by-stale-setup-flow`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-login-blocked-by-stale-setup-flow) (merged into `main`, branch deleted)
+- **Commit(s)**: [36b7383](https://github.com/HectorBravo/padel_booking_alrayyana/commit/36b7383fb2c0008f8e3bc0e808e7634eb01a21e2) (code), merged as [0115346](https://github.com/HectorBravo/padel_booking_alrayyana/commit/0115346ca2dfa9fcc035a701f596838351eb7cfb) — [PR #13](https://github.com/HectorBravo/padel_booking_alrayyana/pull/13)
 - **Blockers**: none
 - **Findings & Notes**:
   - **Root cause**: `_startup_status()` (added in `3e64f44`, made interactive by `3fca3b1`) called `self._on_setupgoogle(chat_ids[0])` at boot whenever Google was configured but its token was dead. That leaves `pending[chat] = {action: "gcal_email"}` waiting for an answer **forever**. `_on_message` routed *every* text through the pending-flow branch before the `/command` dispatch, so the user's next `/login` was fed to the email validator → "That doesn't look like an email." and `_on_login` never ran. /login looked broken; it was unreachable.
@@ -29,6 +28,8 @@
   - **Fix 2**: startup no longer opens the interactive setup unasked; it reports the dead token and offers a one-tap 🔧 Fix Google setup button (`gc:start` → `_on_setupgoogle`). The user starts the flow deliberately.
   - **Fix 3** (second `/login` trap): when `capture_otp` finds nothing, `_otp_from_gmail` fell back to "reply with the code" even when `login_start` had already authenticated the session ("Already authenticated", no `pending_login.json`). It now checks `is_logged_in(get_session(), cfg)` first and reports success.
   - New suite `ai/verify_t23_login_not_blocked.py` (7 checks) — failed 3/5 before the fix, 7/7 after. Regressions: T17 18/18, T9 ALL PASS. All modules compile + import.
+  - **Merged (16-11-2026 08:53)** via [PR #13](https://github.com/HectorBravo/padel_booking_alrayyana/pull/13) as merge commit `0115346`; the branch was rebuilt first (see context notes) so the PR carried **code + tests only** and merged with no conflicts. Post-merge on `main`: compile OK, T23 7/7, T17 18/18. Branch deleted locally and on the remote.
+  - **Not yet deployed** — redeploy on ububu.lan after the CI image rebuild (~120s) and confirm the boot log says `offering re-setup` (not `starting re-setup`) and that `/login` reaches `_on_login`.
 
 ### User Confirmations
 
@@ -61,6 +62,9 @@
 > - There is **no** `/cancel` bot command (cancellation is inline-keyboard only) and the gcal flow never offered one — an early draft of this fix special-cased "/cancel" as flow input; that was wrong and was removed. Do not reintroduce it.
 > - Verified: `python -m py_compile` on all 4 modules + both suites; `import padel_telegram` OK; T23 7/7, T17 18/18, T9 ALL PASS.
 > - **Next**: commit/push on `fix/ai-login-blocked-by-stale-setup-flow`; after the user merges, write the final `done` log commit on `main`, then `git merge --ff-only origin/main` + `--force-with-lease` re-push of the AI branch. Deploy pattern: wait ~120s for the GitHub Actions image rebuild, then redeploy on ububu.lan and confirm boot log shows `offering re-setup` (not `starting re-setup`) and that `/login` reaches `_on_login`.
+>
+> **DONE (16-11-2026 08:53)** — merged as `0115346` (PR #13), branch deleted local + remote. One extra step was needed before merging: the PR reported `mergeable_state: dirty` because the two `docs(ai):` log commits (`42a2421`, `fade63d`) were pushed directly to `main` **and** also sat on the AI branch, so the merge conflicted with itself on `ai/AI_TASKLOG.md`. Fixed by `git reset --mixed 694b55d`, restoring `ai/AI_TASKLOG.md` from that commit (leaving only code + tests changed), re-committing as `36b7383`, and `git push --force-with-lease`. **Lesson for future tasks: never leave the task-log commits on the AI branch — put them on the user's branch only, so the PR carries just the code.**
+> Remaining follow-up: redeploy on ububu.lan (CI rebuild ~120s) and confirm `/login` works live.
 
 ---
 
@@ -323,7 +327,7 @@
 | 11-11-2026 00:28:43 | [T10: Deploy the T9 fix — it was never merged](#task-t10-deploy-the-t9-fix--it-was-never-merged) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 5m | none |
 | 09-11-2026 00:41:06 | [T9: Derive bookable days from the portal](#task-t9-derive-bookable-days-from-the-portal) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 20/20 | 25m | none |
 
-> ✅ **16 completed task(s)** — [View completed tasks](#completed-tasks)
+> ✅ **17 completed task(s)** — [View completed tasks](#completed-tasks)
 
 ---
 
@@ -1292,6 +1296,7 @@ None yet.
 
 | Created | Task | Type | Subtasks | Time Spent |
 |---------|------|------|----------|------------|
+| 16-11-2026 07:51:02 | [T23: /login stopped working — swallowed by the auto-started Google setup flow](#task-t23-login-stopped-working--swallowed-by-the-auto-started-google-setup-flow) | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 1h 2m |
 | 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m |
 | 11-11-2026 02:50:02 | [T15: Merge every AI branch into main and delete them](#task-t15-merge-every-ai-branch-into-main-and-delete-them) | <span style="background-color:#57606a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">chore</span> | 5/5 | 4m |
 | 11-11-2026 01:04:22 | [T13: Treat the picker as the real window limit (7-day assumption is wrong)](#task-t13-treat-the-picker-as-the-real-window-limit-7-day-assumption-is-wrong) | <span style="background-color:#da3633;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">hotfix</span> | 5/6 | 14m |

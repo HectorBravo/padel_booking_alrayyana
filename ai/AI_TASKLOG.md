@@ -4,7 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
-| 17-11-2026 10:18:27 | [T26: Autobook re-login never fires when the session dies inside the booking race](#task-t26-autobook-re-login-never-fires-when-the-session-dies-inside-the-booking-race) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/5 | 0m | none |
+| 17-11-2026 10:18:27 | [T26: Autobook re-login never fires when the session dies inside the booking race](#task-t26-autobook-re-login-never-fires-when-the-session-dies-inside-the-booking-race) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 11m | none |
 | 15-11-2026 23:40:00 | [T22: Startup UX — rocket Bot-started message + console logs for session/google/slots](#task-t22-startup-ux--rocket-bot-started-message--console-logs-for-sessiongoogleslots) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 15m | none |
 | 15-11-2026 23:05:00 | [T21: setupgoogle flow — email, then auth, then pick from real calendar list](#task-t21-setupgoogle-flow--email-then-auth-then-pick-from-real-calendar-list) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 25m | none |
 | 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |
@@ -15,13 +15,13 @@
 
 ## Task T26: Autobook re-login never fires when the session dies inside the booking race
 
-- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Status**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 17-11-2026 10:18:27
-- **Last Updated**: 17-11-2026 10:23:51
-- **Time Spent**: 5m
-- **Branch**: [`fix/ai-autobook-relogin-in-race`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-autobook-relogin-in-race)
-- **Commit(s)**: [0e2c4f7](https://github.com/HectorBravo/padel_booking_alrayyana/commit/0e2c4f7) (log), [edf4809](https://github.com/HectorBravo/padel_booking_alrayyana/commit/edf4809132bc215674993b88704f983d2c3f0ffd) (code); PR #15 open
+- **Last Updated**: 17-11-2026 10:29:26
+- **Time Spent**: 11m
+- **Branch**: [`fix/ai-autobook-relogin-in-race`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-autobook-relogin-in-race) (merged into `main`, branch deleted)
+- **Commit(s)**: [0e2c4f7](https://github.com/HectorBravo/padel_booking_alrayyana/commit/0e2c4f7) (log), [edf4809](https://github.com/HectorBravo/padel_booking_alrayyana/commit/edf4809132bc215674993b88704f983d2c3f0ffd) (code); merged via [PR #15](https://github.com/HectorBravo/padel_booking_alrayyana/pull/15)
 - **Blockers**: none
 - **Findings & Notes**:
   - Symptom (user's Telegram): after the autobook retry limit, "Booking error: Session expired. Re-login before booking." — the automatic re-login never ran.
@@ -29,6 +29,8 @@
   - Fix: added an optional `on_session_expired` callback to `run_booking_race`; every network step now runs through a `_step(fn, what)` wrapper that, on an expired-session `RuntimeError`, calls the recovery hook once and retries. `book_day` passes its own `ensure_session` (which does keepalive → relogin). Non-session `RuntimeError`s propagate unchanged.
   - Also: the long-wait refresh (`on_wait`) now routes an expired session through the same recovery path instead of only logging it.
   - Test-harness bug found while verifying: `ai/verify_t9_behaviors.py` scheduler check hung (12–41 MB of identical log lines). Its `race` wrapper tried `k.setdefault("max_attempts", 4)`, but `book_day` calls the race with `wait_for_open=False`, so the only real bound is the wall-clock deadline — which cannot fire once `time.sleep` is faked. Re-bounded via the race's own `stop` guard (checked every refresh) + a fake sleep counter, and opened the picker on the 2nd scheduler attempt to exercise trigger 3.
+  - **Merged (17-11-2026 10:29)** via [PR #15](https://github.com/HectorBravo/padel_booking_alrayyana/pull/15) as a **fast-forward** (`origin/main` tip = `d327815`, the branch tip; no merge commit). Post-merge on `main`: compile OK, T26 exit 0, T9 15/15, T25/T24/T23/T17 all exit 0. Branch deleted locally and on the remote.
+  - **Not yet deployed** — redeploy after the CI image rebuild (`docker compose pull && docker compose up -d`) and confirm that a mid-race session expiry now recovers instead of showing "Booking error: Session expired…".
 
 ### User Confirmations
 
@@ -46,7 +48,7 @@
 - [x] Subtask 2 — Add `on_session_expired` + `_step` recovery wrapper in `run_booking_race`; wrap the three portal calls and route `on_wait` failures through it.
 - [x] Subtask 3 — Wire `book_day` to pass `on_session_expired=ensure_session`.
 - [x] Subtask 4 — Fix the `verify_t9_behaviors.py` scheduler hang (bound the inner race via its `stop` guard; open picker on 2nd attempt). Full suite green: T9 15/15, T26/T25/T24/T23/T17 exit 0.
-- [ ] Subtask 5 — Commit log before push, push AI branch with `-u`, open PR, merge to `main`, then final log commit + fast-forward/re-push the branch.
+- [x] Subtask 5 — Committed (`0e2c4f7` log, `edf4809` code), pushed with `-u`, merged via [PR #15](https://github.com/HectorBravo/padel_booking_alrayyana/pull/15) (fast-forward), branch deleted locally + remote. Final log commit follows on `main`.
 
 ### Full Context Notes for AI Agents
 
@@ -70,7 +72,7 @@
 - `python ai/verify_t9_behaviors.py` → ALL PASS, exit 0
 - `python ai/verify_t26_autobook_relogin.py`, `_t25_login_google_status`, `_t24_otp_single_use`, `_t23_login_not_blocked`, `_t17_otp_capture` → all exit 0
 
-**Current state**: code + tests complete and green on branch `fix/ai-autobook-relogin-in-race`, UNCOMMITTED (log commit must precede the code commit). Next: subtask 5 (commit log, push `-u`, PR, merge, final log + fast-forward/re-push).
+**Current state**: DONE and on `main` (fast-forward merge of [PR #15](https://github.com/HectorBravo/padel_booking_alrayyana/pull/15); branch deleted locally + remote). All suites green post-merge — T26 exit 0, T9 15/15, T25/T24/T23/T17 exit 0; compile + import OK. Next step: none for the code; deploy proof pending after the CI image rebuild.
 
 **Constraints**: git identity via `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME=AI_bot` env vars + `--author='AI_bot <user_email>'`; never modify `git config`; `[ai]` tag after the colon. `config.json`/`session.json`/`pending_login.json` are gitignored. The harness swallows Python stdout — write findings to a file when debugging, and always bound any loop test with a watchdog or stop guard.
 

@@ -28,3 +28,4 @@ data/*.py
 data/*.log
 
 /aldar_session.json
+/ai_out

@@ -1,5 +1,9 @@
 # AI Tasks Log
 
+> **Uninstall / cleanup**: every tool this task installs is listed with removal
+> commands in [`ai/UNINSTALL_MANIFEST.md`](UNINSTALL_MANIFEST.md). Keep it updated.
+
+
 ## Summary
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |

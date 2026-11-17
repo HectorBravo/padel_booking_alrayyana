@@ -2284,7 +2284,7 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
                      wait_for_open: bool = True, timeout: int | None = None,
                      max_attempts: int | None = None, dry_run: bool = False,
                      retry_minutes: int | None = None, stop=None,
-                     on_wait=None, on_retry=None):
+                     on_wait=None, on_retry=None, on_session_expired=None):
     """Poll the portal and book the best preferred slot when one is bookable.
 
     Two facts are read on every refresh and must NOT be conflated:
@@ -2336,7 +2336,17 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
     the first refresh** of an attempt, i.e. once the race has decided to wait
     rather than book now. The race never repeats it, so a caller can use it for
     one "I am trying, but this day is not available yet" notice without having
-    to de-duplicate hours of identical messages itself.
+    to de-duplicate hours of identical messages itself. ``on_session_expired``
+    is an optional no-arg callback returning True when it has restored the
+    session (autobooking passes its re-login here). Without it — or when it
+    returns False — a session that dies mid-race surfaces as the usual
+    "Session expired" RuntimeError; with it, the race recovers and keeps going.
+
+    A session can expire **inside** the race, not only before it: the caller may
+    have validated it minutes earlier, and each refresh re-reads the picker and
+    the slots. That is why every network step below goes through ``_step``,
+    which offers one recovery attempt instead of letting the error escape and
+    abort the booking with a bare "Booking error".
     """
     open_hour = int(cfg.get("booking_open_hour", 0))
     if retry_minutes is None:
@@ -2347,9 +2357,41 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
                                               BOOKING_MAX_WAIT_MINUTES)) * 60)
     now = datetime.now()
 
+    def _expired(err) -> bool:
+        """True when this exception means 'the session is gone'."""
+        return "session expired" in str(err).lower() or \
+            "session missing" in str(err).lower()
+
+    def _recover() -> bool:
+        """Ask the caller to restore the session; True when it did."""
+        if on_session_expired is None:
+            return False
+        try:
+            return bool(on_session_expired())
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            print(f"{ts_prefix()} [bot] session recovery failed: {e}", flush=True)
+            return False
+
+    def _step(fn, what: str):
+        """Run a portal call; on an expired session, recover once and retry.
+
+        Any RuntimeError that is not session-related propagates unchanged, so
+        real errors still reach the caller's handler.
+        """
+        try:
+            return fn()
+        except RuntimeError as e:
+            if not _expired(e):
+                raise
+            print(f"{ts_prefix()} [bot] session expired during {what}; "
+                  f"attempting recovery...", flush=True)
+            if not _recover():
+                raise
+            return fn()
+
     # Pre-warm the shared session + booking meta (lowers the booking latency):
     # one fetch that also validates the session.
-    s, meta = get_booking_meta(cfg)
+    s, meta = _step(lambda: get_booking_meta(cfg), "booking-meta prewarm")
 
     # Micro-optimisation: if this is the day at the far end of the rolling
     # window and the portal opens it at ``booking_open_hour`` (a convention,
@@ -2382,7 +2424,7 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
         #     but an UNREADABLE picker must not pretend to know the ceiling —
         #     that would refuse a date only because parsing failed.
         first, arith_last = window_limit(cfg, datetime.now())
-        offered = portal_bookable_dates(cfg)
+        offered = _step(lambda: portal_bookable_dates(cfg), "picker read")
         if target_date < first:
             return None, [], None, "outside_window"
         if offered and target_date > max(offered):
@@ -2399,7 +2441,8 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
             ever_opened = True
 
             # (3) Are its slots open? Only asked once the picker offers the day.
-            slots = get_available_slots(s, cfg, api_date, meta)
+            slots = _step(lambda: get_available_slots(s, cfg, api_date, meta),
+                          "slot read")
             last_slots = slots
             best = pick_best_slot(slots, preferred)
             if best:
@@ -2467,12 +2510,18 @@ def run_booking_race(cfg: dict, target: datetime, preferred: list,
                       f"{e}", flush=True)
         if on_wait is not None:
             # Long waits must not starve the session: refresh it before sleeping
-            # so a hours-long wait cannot end with an expired session.
+            # so a hours-long wait cannot end with an expired session. A failure
+            # here usually means the session just died, so let the recovery path
+            # (on_session_expired) handle it rather than only logging it.
             try:
                 on_wait()
             except Exception as e:  # pylint: disable=broad-exception-caught
-                print(f"{ts_prefix()} [bot] wait refresh failed (non-fatal): "
-                      f"{e}", flush=True)
+                if _expired(e) and _recover():
+                    print(f"{ts_prefix()} [bot] session restored during wait.",
+                          flush=True)
+                else:
+                    print(f"{ts_prefix()} [bot] wait refresh failed "
+                          f"(non-fatal): {e}", flush=True)
         time.sleep(retry_secs)
 
 
@@ -2723,7 +2772,7 @@ def run_autobook_loop(cfg: dict, log, *, notify=None, relogin=None,
                 cfg, datetime.combine(target, datetime.min.time()),
                 preferred, wait_for_open=False, dry_run=dry_run,
                 stop=stop_event, on_wait=lambda: keepalive(cfg),
-                on_retry=on_retry)
+                on_retry=on_retry, on_session_expired=ensure_session)
             t_race = time.time() - t0
             # A future day the picker does not list yet is NOT a failure: it is
             # simply not open, and trigger (3) re-attempts it as soon as the

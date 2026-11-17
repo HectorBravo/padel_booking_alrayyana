@@ -438,6 +438,11 @@ def picker_opens_later_books_check():
     def slots(s, cfg, api_date, meta):
         return [] if reads["n"] < 4 else [SLOT]
 
+    # max_attempts bounds the refreshes: without it the race is bounded only by
+    # booking_max_wait_minutes (360 min here) measured on the REAL clock, while
+    # sleep is stubbed out — so the loop would spin ~180k times before the
+    # deadline and look like a hang. Four attempts is exactly what this scenario
+    # needs: 2 unreadable reads, one that misses the target, one that books it.
     with patch.object(pb, "get_booking_meta", lambda cfg: (object(), {})), \
          patch.object(pb, "portal_bookable_dates", offered), \
          patch.object(pb, "get_available_slots", slots), \
@@ -447,7 +452,7 @@ def picker_opens_later_books_check():
          patch.object(pb.time, "sleep", lambda s: None):
         outcome = pb.run_booking_race(
             CFG, datetime.combine(target, datetime.min.time()), PREFERRED,
-            wait_for_open=False)[3]
+            wait_for_open=False, max_attempts=4)[3]
 
     ok = len(posts) == 1 and outcome == "slot_found"
     print(f"[{'PASS' if ok else 'FAIL'}] portal opens the day during the wait "
@@ -472,19 +477,36 @@ def scheduler_retries_until_open_check():
 
     clock = {"t": 1_000_000.0}
     reads = {"n": 0}
+    races = {"n": 0}
     posts = []
     logs = []
 
     def offered(cfg, force=False):
         reads["n"] += 1
-        # Open the target only from the 3rd scheduler read onwards.
-        return picker_without if reads["n"] < 3 else [target]
+        # The picker keeps NOT listing the target until the scheduler has made a
+        # second attempt (i.e. re-armed via its pending-retry trigger); from that
+        # point on it lists the day so the next race can book it.
+        return picker_without if races["n"] < 2 else [target]
 
     cfg = {"preferred_slots": {target.strftime("%A"): ["19:00"]},
            "slot_retry_minutes": 2}
 
+    stop = threading.Event()
+
+    # The inner race is bounded ONLY by its own `stop` guard (checked every
+    # refresh): book_day calls it with wait_for_open=False, so the wall-clock
+    # deadline can't help once sleeps are faked. We raise `stop` after enough
+    # total stubbed sleeps for: pass-1's race to exhaust its refreshes and return
+    # not_yet_open, several 0.5s loop ticks (so time advances past the pending
+    # retry band), then stop before pass-2 could spin. Pass-2 books on its first
+    # refresh (no sleep), so it lands well under this cap.
+    sleeps = {"n": 0}
+
     def fake_sleep(secs):
         clock["t"] += secs
+        sleeps["n"] += 1
+        if sleeps["n"] >= 40:
+            stop.set()
 
     real_time = pb.time.time
     with patch.object(pb, "time") as tmod:
@@ -506,15 +528,16 @@ def scheduler_retries_until_open_check():
              patch.object(pb, "record_booking", lambda *a, **k: None), \
              patch.object(pb, "sync_booking", lambda *a, **k: False), \
              patch.object(pb, "_reconcile_booked", lambda b: None):
-            stop = threading.Event()
 
             def bookings(s):
                 return []
 
-            # Stop the loop right after the booking lands.
+            # Count scheduler attempts so the picker "opens" the day on the 2nd
+            # one; stop the loop right after the booking lands.
             orig_race = pb.run_booking_race
 
             def race(*a, **k):
+                races["n"] += 1
                 res = orig_race(*a, **k)
                 if res[3] == "slot_found":
                     stop.set()

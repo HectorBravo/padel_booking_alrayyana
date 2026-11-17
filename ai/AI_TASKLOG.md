@@ -85,7 +85,18 @@ Tooling installed and verified on this machine:
 2. **Start the Nox emulator**, install Live Aldar inside it, then the same `adb pull`. (Nox is x86 → needs Houdini/ARM translation; may fail on ARM-only native libs.)
 3. Third-party APK mirror — possible but I'd rather not: unverifiable binary provenance.
 
-**Once we have the APK, my plan (no guessing):** `aapt dump badging` for the manifest → unzip and read `assets/index.android.bundle` (React Native) or `assets/*.js` to grep the *real* amenity endpoints; check `res/xml/network_security_config.xml` + native libs (`libsslpinning`, OkHttp certificate piner) to know if pinning blocks a plain proxy; then mitmproxy/Burp (or objection's `sslpinning disable`) to capture the live booking call.
+**Progress (18-11-2026 04:50) — BUILDING OUR OWN EMULATOR (Nox unusable, no Hyper-V role)**:
+The user's Nox emulator cannot start (needs the Hyper-V feature; user declined to install it). Instead of giving up, we use the **Google Android Emulator with WHPX**, which works because a hypervisor is already present (`Win32_ComputerSystem.HypervisorPresent = True`) — no Windows feature changes required. Host: i7-12700K, 128 GB RAM.
+
+What was set up (all under `D:\android_sdk`, nothing system-wide):
+- Android **command-line tools** (`commandlinetools-win-11076708`) → `D:\android_sdk\cmdline-tools\latest`.
+- Reused the existing JDK: `D:\tools\jdk-17.0.2` (set as `JAVA_HOME` only inside our scripts — no global env changes).
+- All SDK licenses accepted; installed **platform-tools**, **emulator**, **platforms;android-34**, and **system-images;android-34;google_apis_playstore;x86_64** (Google Play image → real Play Store inside the AVD, so Live Aldar installs legitimately *and* x86_64 runs natively on this CPU — no ARM translation problem).
+- Helper scripts: `ai_out/yes.bat` (auto-accept prompts), `ai_out/sdk_install.bat` (re-runnable installer; PowerShell mangles the `;` in SDK package ids, so keep it in a .bat).
+
+**Why the Google Play image matters**: with Play Store inside the AVD we can install the official app and sign in; and if the app pins certificates, we still have the option of an **x86_64 frida-server** (native, no ARM shims) + `objection sslpinning disable`.
+
+Next: create the AVD (`avdmanager create avd -n aldar -k "system-images;android-34;google_apis_playstore;x86_64" -d pixel_6`), boot it headless with `-writable-system`, install Live Aldar from Play, then capture traffic (mitmproxy on the host; emulator reaches it via `10.0.2.2`) or dump the JS bundle/endpoints straight off the device.
 
 **Progress (18-11-2026 02:55) — ENDPOINTS PROVEN WITH A REAL BROWSER SESSION (playwright-cli)**:
 Installed the `microsoft/playwright-cli` skill (`npm i -g @playwright/cli`). Drove a headless Chromium through the real UI once: `/live/login` (email, password, **Remember Me checked**) → `/live/otp` (4-digit code captured from Gmail by `aldar_probe.capture_aldar_otp`) → logged in. Then saved storage state and recorded every XHR with `playwright-cli requests / request-body / response-body`.

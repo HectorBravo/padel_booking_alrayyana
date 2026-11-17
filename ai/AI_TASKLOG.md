@@ -53,6 +53,28 @@
 - [ ] Subtask 7 — Apply the `UAEPASS` scope fix in `aldar_probe.py` and re-verify `classes/packages` returns 201 from our own auth (not just the browser token)
 - [ ] Subtask 8 — Discover the amenity booking endpoints (browser capture on the facility tiles), then design the padel booking flow
 
+**Progress (18-11-2026 03:40) — AMENITY BOOKING IS NOT IN THE WEB APP AT ALL**:
+Dumped the SPA's complete endpoint map (`app.js` module 85767, `let i = {…}` → 273 entries, resolved to origins; full dump in `ai_out/epmap.txt`). Every booking-ish route is:
+
+| group | endpoints | service |
+|---|---|---|
+| classes (the only "booking" flow in the web UI) | `classes/categories`, `classes/packages`, `classes/schedules`, `classes/availableSlots`, `classes/bookings` (create), `classes/getBookings`, `classes/initiate-payment` | requestservice / transactionservice |
+| dead legacy (`bookings/classes`, `bookings/class/details`, `bookings/provider/classes`) | 404 "Cannot POST" | — |
+| service-request appointments (villa maintenance/handover, NOT amenities) | `appointment/slots`, `appointment/schedule`, `appointment/candidates`, `appointment/create`, `appointment/reschedule`, `appointment/handover`, `appointments/dates|slots|create|cancel` | requestservice / identityservice |
+| sales unit booking (buying property, not amenities) | `booking/unit/locking`, `booking/unit/details`, `booking/payment/plans` … | identityservice |
+
+**There is no amenity/facility/court endpoint anywhere in the web bundle.** Combined with the booking record (`bookingTypeVal: "Amenity"`) and the UI ("No classes available in this category"), the conclusion is: **Aldar kept amenity booking (the Padel Court) in the mobile app only** — exactly what the user reports.
+
+Targeted probes (3 requests total, no sweeps):
+- `classes/schedules` with `{customerId,unitId,referenceId,communityId,buildingId,classId:"08pTq000006ihQnIAI"}` → **400 "packageId is required"** (validator contract learned).
+- same + `packageId:"x"` → **500 "Failed to retrieve schedules"** — so the ids are genuinely looked up; a real class+package id would return data. The endpoint works; we simply have no amenity ids.
+- `classes/availableSlots` and `classes/bookings` with `{}` → **403 "Forbidden resource"** (same guard as before: body must carry identity + valid ids).
+
+**Decision point / options for the user**:
+1. **Capture the mobile app's traffic** (the original question). Android emulator + proxy is the practical route: `app.apk` + mitmproxy/Burp, or a real Android with Wi-Fi proxy + user CA cert. iOS needs a jailbreak or an SSL-kill-switch device; a Mac + Proxyman works for non-pinned traffic. **Must first check whether the app pins certificates** — if it does, only Frida/objection on a rooted device will work.
+2. Ask Aldar/Reeman support whether amenity booking is coming back to the web.
+3. Keep the bot for *classes* only (fully mapped) and do padel manually.
+
 **Progress (18-11-2026 02:55) — ENDPOINTS PROVEN WITH A REAL BROWSER SESSION (playwright-cli)**:
 Installed the `microsoft/playwright-cli` skill (`npm i -g @playwright/cli`). Drove a headless Chromium through the real UI once: `/live/login` (email, password, **Remember Me checked**) → `/live/otp` (4-digit code captured from Gmail by `aldar_probe.capture_aldar_otp`) → logged in. Then saved storage state and recorded every XHR with `playwright-cli requests / request-body / response-body`.
 

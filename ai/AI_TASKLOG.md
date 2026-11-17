@@ -18,10 +18,10 @@
 - **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
 - **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
 - **Created**: 17-11-2026 10:18:27
-- **Last Updated**: 17-11-2026 10:18:27
-- **Time Spent**: 0m
+- **Last Updated**: 17-11-2026 10:23:51
+- **Time Spent**: 5m
 - **Branch**: [`fix/ai-autobook-relogin-in-race`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-autobook-relogin-in-race)
-- **Commit(s)**: pending
+- **Commit(s)**: [0e2c4f7](https://github.com/HectorBravo/padel_booking_alrayyana/commit/0e2c4f7) (log), [edf4809](https://github.com/HectorBravo/padel_booking_alrayyana/commit/edf4809132bc215674993b88704f983d2c3f0ffd) (code); PR #15 open
 - **Blockers**: none
 - **Findings & Notes**:
   - Symptom (user's Telegram): after the autobook retry limit, "Booking error: Session expired. Re-login before booking." — the automatic re-login never ran.

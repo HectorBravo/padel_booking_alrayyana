@@ -75,13 +75,17 @@ Stays too — it pairs with the kept npm package above.
 **Remove:** delete its entry from `%USERPROFILE%\.agents\skills\` and
 `%USERPROFILE%\.agents\.skill-lock.json` (or `npx skills remove playwright-cli`).
 
-## 5. Repo-local artifacts (safe to delete; already gitignored)
+## 5. Repo-local artifacts (✅ REMOVE at the end — user confirmed)
 
 | Path | Contents |
 |---|---|
 | `ai_out\` | downloaded SPA bundles (`app.js`, `detail.js`, …), captured requests (`cap_*`), endpoint map `epmap.txt`, helper scripts (`find_vars.py`, `replay_pkg.py`, `yes.bat`, `sdk_install.bat`), browser storage state `aldar_pw_state.json` (**contains a live 180-day token — delete when done**) |
-| `.playwright-cli\` | playwright-cli working dir (page snapshots, console logs) |
+| `.playwright-cli\` | playwright-cli working dir inside this repo (page snapshots, console logs) |
 | `aldar_session.json` | our probe's saved session/token (gitignored) |
+
+> Note: deleting `.playwright-cli\` here only removes the **repo-local working dir**.
+> The `@playwright/cli` npm package and the `playwright-cli` skill stay installed
+> (see sections 3 and 4 — both marked KEEP).
 
 **Remove:**
 ```powershell
@@ -102,6 +106,6 @@ Remove-Item -LiteralPath 'aldar_session.json' -Force
 
 | Keep | Remove |
 |---|---|
-| `@playwright/cli` (npm) + `playwright-cli` skill | `D:\android_sdk` (~4.5 GB) + `~\.android` |
+| `@playwright/cli` (npm) + `playwright-cli` skill (**user confirmed**) | `D:\android_sdk` (~4.5 GB) + `~\.android` |
 | | pip: frida, frida-tools, objection, google-play-api-unofficial (+deps if new) |
-| | repo: `ai_out\`, `.playwright-cli\`, `aldar_session.json` (contains live token) |
+| | repo: `ai_out\`, `.playwright-cli\` (repo working dir only), `aldar_session.json` (contains live token) |

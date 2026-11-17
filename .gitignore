@@ -29,3 +29,6 @@ data/*.log
 
 /aldar_session.json
 /ai_out
+  
+# playwright-cli working dir  
+/.playwright-cli/ 

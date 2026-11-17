@@ -4,6 +4,7 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 17-11-2026 10:18:27 | [T26: Autobook re-login never fires when the session dies inside the booking race](#task-t26-autobook-re-login-never-fires-when-the-session-dies-inside-the-booking-race) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 4/5 | 0m | none |
 | 15-11-2026 23:40:00 | [T22: Startup UX — rocket Bot-started message + console logs for session/google/slots](#task-t22-startup-ux--rocket-bot-started-message--console-logs-for-sessiongoogleslots) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 15m | none |
 | 15-11-2026 23:05:00 | [T21: setupgoogle flow — email, then auth, then pick from real calendar list](#task-t21-setupgoogle-flow--email-then-auth-then-pick-from-real-calendar-list) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 25m | none |
 | 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |
@@ -11,6 +12,69 @@
 | 13-11-2026 19:21:45 | [T18: Make the Google OAuth callback endpoint work (fix the 502)](#task-t18-make-the-google-oauth-callback-endpoint-work-fix-the-502) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 6/6 | 40m | none |
 | 13-11-2026 13:34:10 | [T17: Auto-capture the OTP from Gmail instead of asking the user](#task-t17-auto-capture-the-otp-from-gmail-instead-of-asking-the-user) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 9/9 | 18m | none (live proof awaits Google re-auth) |
 | 11-11-2026 04:23:36 | [T16: Diagnose the unreadable picker that makes waits pointless](#task-t16-diagnose-the-unreadable-picker-that-makes-waits-pointless) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 12m | none |
+
+## Task T26: Autobook re-login never fires when the session dies inside the booking race
+
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span>
+- **Created**: 17-11-2026 10:18:27
+- **Last Updated**: 17-11-2026 10:18:27
+- **Time Spent**: 0m
+- **Branch**: [`fix/ai-autobook-relogin-in-race`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/fix/ai-autobook-relogin-in-race)
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - Symptom (user's Telegram): after the autobook retry limit, "Booking error: Session expired. Re-login before booking." — the automatic re-login never ran.
+  - Root cause: `book_day()` validates the session once via `ensure_session()`, then calls `run_booking_race()`. Inside the race, every portal call (`get_booking_meta` prewarm, `portal_bookable_dates`, `get_available_slots`) can raise `RuntimeError("Session expired…")` (raised at `padel_booking.py:652`). That escaped `book_day`'s `try/except` as a bare "Booking error" and never reached `relogin()`.
+  - Fix: added an optional `on_session_expired` callback to `run_booking_race`; every network step now runs through a `_step(fn, what)` wrapper that, on an expired-session `RuntimeError`, calls the recovery hook once and retries. `book_day` passes its own `ensure_session` (which does keepalive → relogin). Non-session `RuntimeError`s propagate unchanged.
+  - Also: the long-wait refresh (`on_wait`) now routes an expired session through the same recovery path instead of only logging it.
+  - Test-harness bug found while verifying: `ai/verify_t9_behaviors.py` scheduler check hung (12–41 MB of identical log lines). Its `race` wrapper tried `k.setdefault("max_attempts", 4)`, but `book_day` calls the race with `wait_for_open=False`, so the only real bound is the wall-clock deadline — which cannot fire once `time.sleep` is faked. Re-bounded via the race's own `stop` guard (checked every refresh) + a fake sleep counter, and opened the picker on the 2nd scheduler attempt to exercise trigger 3.
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+- None yet.
+
+**Confirmed (user provided):**
+
+- (17-11-2026 10:18:27) Reported symptom → "if the automatic rebooking fails after it reaches the limit (I think it was 12 hours) the relogin does not work. The message I see on telegram is 'booking error: session expired. Re-login before booking'."
+
+### Subtasks / Plan
+
+- [x] Subtask 1 — Reproduce: `ai/verify_t26_autobook_relogin.py` (session dies mid-race → must recover, not escape).
+- [x] Subtask 2 — Add `on_session_expired` + `_step` recovery wrapper in `run_booking_race`; wrap the three portal calls and route `on_wait` failures through it.
+- [x] Subtask 3 — Wire `book_day` to pass `on_session_expired=ensure_session`.
+- [x] Subtask 4 — Fix the `verify_t9_behaviors.py` scheduler hang (bound the inner race via its `stop` guard; open picker on 2nd attempt). Full suite green: T9 15/15, T26/T25/T24/T23/T17 exit 0.
+- [ ] Subtask 5 — Commit log before push, push AI branch with `-u`, open PR, merge to `main`, then final log commit + fast-forward/re-push the branch.
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: self-contained knowledge base to resume this task without other context.
+
+**Exact code change (`padel_booking.py`)**:
+- `run_booking_race` signature (:2283) gained `on_session_expired=None`.
+- Three closures after `now = datetime.now()` (~:2360): `_expired(err)` (matches `"session expired"`/`"session missing"` lowercased — matches the production string at :652), `_recover()` (calls `on_session_expired()`, returns bool, swallows+logs its own exceptions), and `_step(fn, what)` (runs `fn()`; on a session-expired `RuntimeError` prints "session expired during {what}; attempting recovery…", calls `_recover()`, retries once, else re-raises; non-session errors propagate).
+- Wrapped call sites: prewarm `s, meta = _step(lambda: get_booking_meta(cfg), "booking-meta prewarm")`; loop picker `offered = _step(lambda: portal_bookable_dates(cfg), "picker read")`; slots `slots = _step(lambda: get_available_slots(s, cfg, api_date, meta), "slot read")`.
+- `on_wait` block (~:2513): on exception, `if _expired(e) and _recover(): print("session restored during wait.") else: <old non-fatal log>`.
+- `book_day` race call (~:2771) now passes `on_session_expired=ensure_session`.
+
+**Why this is the fix**: `book_day` already had a session-validity guard, but it runs *before* the race; the portal session can die during the (up to 12h) wait or between validation and the first network hit. The escaped error string was identical to the pre-guard message, so it looked like "re-login didn't work" when in fact `relogin()` was never invoked from inside the race.
+
+**Test harness (`ai/verify_t9_behaviors.py`, scheduler check ~:468)**:
+- Fakes `pb.time` (time/sleep/monotonic) with a virtual clock, so `datetime.now()` stays real while `time.sleep` is stubbed. Because `book_day` calls the race with `wait_for_open=False`, the ONLY in-loop bound that can fire under faked sleep is the `stop` guard at :2419 — hence the old `max_attempts=4` setdefault did nothing and the loop spun forever.
+- New design: a global `sleeps["n"]` counter raises the shared `stop` Event at 40 total stubbed sleeps; `offered()` returns the picker WITHOUT the target until `races["n"] >= 2`, so pass-1 returns `not_yet_open`, the loop advances past `retry_wait_secs` (120s of virtual time via 0.5s ticks), trigger 3 (`due`) re-attempts, and pass-2 books on its first refresh. Result: terminates in <1s, ALL PASS (15/15).
+
+**Verification commands** (all green):
+- `python -m py_compile padel_booking.py padel_telegram.py google_calendar.py google_otp.py ai/verify_t9_behaviors.py ai/verify_t26_autobook_relogin.py`
+- `python ai/verify_t9_behaviors.py` → ALL PASS, exit 0
+- `python ai/verify_t26_autobook_relogin.py`, `_t25_login_google_status`, `_t24_otp_single_use`, `_t23_login_not_blocked`, `_t17_otp_capture` → all exit 0
+
+**Current state**: code + tests complete and green on branch `fix/ai-autobook-relogin-in-race`, UNCOMMITTED (log commit must precede the code commit). Next: subtask 5 (commit log, push `-u`, PR, merge, final log + fast-forward/re-push).
+
+**Constraints**: git identity via `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME=AI_bot` env vars + `--author='AI_bot <user_email>'`; never modify `git config`; `[ai]` tag after the colon. `config.json`/`session.json`/`pending_login.json` are gitignored. The harness swallows Python stdout — write findings to a file when debugging, and always bound any loop test with a watchdog or stop guard.
+
+---
 
 ## Task T25: /login should also confirm the Google integration state
 

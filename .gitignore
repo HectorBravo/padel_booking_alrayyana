@@ -27,3 +27,4 @@ data/*.json
 data/*.py
 data/*.log
 
+/aldar_session.json

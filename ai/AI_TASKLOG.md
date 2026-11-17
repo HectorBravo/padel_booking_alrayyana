@@ -4,7 +4,77 @@
 
 | Created | Task | Status | Type | Subtasks | Time Spent | Blockers |
 |---------|------|--------|------|----------|------------|----------|
+| 18-11-2026 00:07:55 | [T27: Aldar Live migration — probe script for the new ForgeRock auth + booking APIs](#task-t27-aldar-live-migration--probe-script-for-the-new-forgerock-auth--booking-apis) | <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 0/6 | 0m | none |
 | 17-11-2026 10:18:27 | [T26: Autobook re-login never fires when the session dies inside the booking race](#task-t26-autobook-re-login-never-fires-when-the-session-dies-inside-the-booking-race) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#9e6a03;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">fix</span> | 5/5 | 11m | none |
+
+---
+
+## Task T27: Aldar Live migration — probe script for the new ForgeRock auth + booking APIs
+
+- **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
+- **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
+- **Created**: 18-11-2026 00:07:55
+- **Last Updated**: 18-11-2026 00:07:55
+- **Time Spent**: 0m
+- **Branch**: pending
+- **Commit(s)**: pending
+- **Blockers**: none
+- **Findings & Notes**:
+  - The Asteco portal (`myportal.asteco.com`) is gone; the community moved to Aldar Live (`https://www.aldar.com/live`), a Next.js SPA whose whole API surface was extracted statically from its JS bundles (no iPhone traffic capture needed).
+  - Auth = ForgeRock AM at `https://frald.aldar.com/am`, realm `alpha`, journey **`LIVE ALDAR WEB USER EMAIL LOGIN`**. Verified live: `POST /am/json/realms/root/realms/alpha/authenticate?authIndexType=service&authIndexValue=LIVE%20ALDAR%20WEB%20USER%20EMAIL%20LOGIN&flow=<same>` → HTTP 200 with `callbacks`: `NameCallback(IDToken1)` + `PasswordCallback(IDToken2)`.
+  - OTP = **4 digits**, emailed by `no-reply@aldar.com` ("Use the following One-Time Password (OTP)… <code> … valid for the next 10 minutes"). The old Gmail capture in `google_otp.py` filters `from:asteco.com` + "is your ASTECO OTP" → must be re-pointed at aldar.com.
+  - Booking APIs on **`https://communityservice.live.aldar.com/api/v1/`** (verified live: real paths → 403 auth-gate; fake paths → 404): `classes/categories`, `bookings/classes`, `bookings/class/details`, `classes/schedules`, `classes/packages`, `classes/availableSlots`, **`classes/bookings` (create)**, `classes/getBookings` (history), `classes/initiate-payment`.
+  - Create-booking payload (decoded from the `booking/detail` chunk): `{classScheduleId, classId, packageId, packageType, numberOfParticipants, unitId, customerId, referenceId(PersonEmail), participants[{name,age,ParticipantId,bookingAmount,vatAmount}], totalBookingAmount, totalVatAmount}`.
+  - User confirmation: web UI only shows booking *history* for them; the create flow exists in the SPA (detail page) but they couldn't reach it — hence the probe-first approach before rewriting the bot.
+
+### User Confirmations
+
+**Pending (awaiting user response):**
+
+- None yet.
+
+**Confirmed (user provided):**
+
+- (18-11-2026 00:05) Capture route? → "First write a small probe script that logs in, lists categories/classes/slots so we confirm the flow before rewriting the bot"
+- (18-11-2026 00:06) Credentials? → "I'll edit config.json myself with the new credentials; you just make the probe read from it"
+
+### Subtasks / Plan
+
+- [ ] Subtask 1 — `aldar_probe.py`: ForgeRock login phase 1 (credentials → OTP callback), print callback shape
+- [ ] Subtask 2 — OTP capture from Gmail for aldar.com emails (probe-local regex first)
+- [ ] Subtask 3 — Phase 2: submit the OTP into the callback chain, obtain the session/token
+- [ ] Subtask 4 — Authenticated calls to `communityservice…/api/v1`: categories → classes → schedules/packages → availableSlots
+- [ ] Subtask 5 — Dump each response (status + JSON head) so the request shapes are confirmed; save tokens for reuse
+- [ ] Subtask 6 — Run end-to-end with the user's credentials, record findings
+
+### Full Context Notes for AI Agents
+
+> **Purpose**: self-contained knowledge base to resume this task without other context.
+
+**Goal**: migrate `padel_booking.py` (Asteco) to Aldar Live. This task delivers ONLY a probe script (`aldar_probe.py`) that proves the new auth + read endpoints; the full bot rewrite is a follow-up task.
+
+**Auth flow (ForgeRock AM, verified)**:
+- Base: `https://frald.aldar.com/am`; realm path `realms/root/realms/alpha`.
+- Start: `POST /json/realms/root/realms/alpha/authenticate?authIndexType=service&authIndexValue=LIVE%20ALDAR%20WEB%20USER%20EMAIL%20LOGIN&flow=LIVE%20ALDAR%20WEB%20USER%20EMAIL%20LOGIN` with `Content-Type: application/json`, body `{}` → 200 `{authId, callbacks:[{type:"NameCallback",input:[{name:"IDToken1"}]},{type:"PasswordCallback",input:[{name:"IDToken2"}]}], header, description}`.
+- Continue: POST the same URL with `{"authId": <previous authId>, "callbacks":[...output filled...]}`. Name → `output: email`; Password → `output: password`. The chain then emits an OTP callback (type TBD live — likely `TextOutputCallback` + `NameCallback`, or a CM-OTP node); answer it with the 4-digit code. Final step returns `{"token": <JWT>, "success": true}` or a redirect URL. Whether the communityservice API wants the AM JWT (`sessionToken`/`id_token`) as `Authorization: Bearer` or an OAuth access token is **TBD live** — probe must try both.
+- The web app posts with headers `Content-Type: application/json`; FR SDK adds `Accept-API-Version: protocol=1.0,resource=2.0` + `X-Requested-With` (values seen in login chunk; probe should send these too).
+
+**OTP email**: sender `no-reply@aldar.com`; body contains "One-Time Password (OTP)" and a bare 4-digit line. Gmail capture code: reuse `google_otp.py` machinery (`_get_access_token`, `_list_otp_messages`, `_get_message`, `message_text`) but with query `from:aldar.com` and a regex tolerant of the new wording ("Use the following One-Time Password (OTP)… <4 digits> … valid for the next 10 minutes"). In the probe, implement locally (do not edit google_otp.py yet).
+
+**Booking APIs (communityservice)** — all under `https://communityservice.live.aldar.com/api/v1/`:
+- Verbs/shapes TBD live; known paths (from `_app` chunk endpoint map): `classes/categories`, `bookings/classes`, `bookings/class/details`, `bookings/provider/classes`, `classes/schedules`, `classes/packages`, `classes/availableSlots`, `classes/bookings` (CREATE — never call in probe), `classes/getBookings` (history), `bookings/faq`, `bookings/terms`, `classes/initiate-payment`.
+- Probe must try GET first, then POST `{}`; record status + body head. 403 = auth-gated path exists; 404 = wrong verb/path or missing query params.
+- Verified unauthenticated: `classes/availableSlots` → 403, `classes/bookings` → 403 (POST), `classes/getBookings` → 404 (GET), `bookings/classes` → 404 (GET). So verbs matter and are TBD.
+
+**Config**: probe reads the existing `config.json` (`email`, `password`). User will update those to the new Aldar credentials themselves. Do not commit `config.json`.
+
+**Local artifacts**: `ai_out/` holds downloaded SPA bundles (`app.js` = `_app-248c41826c60b326.js`, `detail.js`, `bm.js` = build manifest) + `find_vars.py` (deobfuscation helper). Useful for later endpoint-shape digging; keep untracked or gitignore.
+
+**Build-manifest routes** (`bm.js`): booking pages are `/iceridge/user/user-requests/booking/{booking-class,bookingHistory,bookingStatus,detail,receipt}` — the web app CAN create bookings (detail page has Book Now + `booking_create_*` GA events); user just couldn't see the entry point.
+
+**Current state**: nothing written yet for T27 except this log. Next: write `aldar_probe.py`, then run phase 1 live (safe, no side effects), then ask the user to confirm config.json credentials are updated before running the OTP step (it emails them).
+
+
 | 15-11-2026 23:40:00 | [T22: Startup UX — rocket Bot-started message + console logs for session/google/slots](#task-t22-startup-ux--rocket-bot-started-message--console-logs-for-sessiongoogleslots) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 2/2 | 15m | none |
 | 15-11-2026 23:05:00 | [T21: setupgoogle flow — email, then auth, then pick from real calendar list](#task-t21-setupgoogle-flow--email-then-auth-then-pick-from-real-calendar-list) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 4/4 | 25m | none |
 | 15-11-2026 12:45:00 | [T20: Auto-login at program start (CLI + telegram) via Gmail OTP](#task-t20-auto-login-at-program-start-cli--telegram-via-gmail-otp) | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">done</span> | <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span> | 3/3 | 25m | none |

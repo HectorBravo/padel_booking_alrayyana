@@ -14,10 +14,10 @@
 - **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
 - **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
 - **Created**: 18-11-2026 00:07:55
-- **Last Updated**: 18-11-2026 00:07:55
-- **Time Spent**: 0m
-- **Branch**: pending
-- **Commit(s)**: pending
+- **Last Updated**: 18-11-2026 00:35:00
+- **Time Spent**: 27m
+- **Branch**: [`feat/ai-aldar-live-probe`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/feat/ai-aldar-live-probe)
+- **Commit(s)**: [4254370](https://github.com/HectorBravo/padel_booking_alrayyana/commit/4254370) (log), [16c5bbc](https://github.com/HectorBravo/padel_booking_alrayyana/commit/16c5bbc) (probe script)
 - **Blockers**: none
 - **Findings & Notes**:
   - The Asteco portal (`myportal.asteco.com`) is gone; the community moved to Aldar Live (`https://www.aldar.com/live`), a Next.js SPA whose whole API surface was extracted statically from its JS bundles (no iPhone traffic capture needed).
@@ -40,12 +40,14 @@
 
 ### Subtasks / Plan
 
-- [ ] Subtask 1 — `aldar_probe.py`: ForgeRock login phase 1 (credentials → OTP callback), print callback shape
-- [ ] Subtask 2 — OTP capture from Gmail for aldar.com emails (probe-local regex first)
+- [x] Subtask 1 — `aldar_probe.py`: ForgeRock login phase 1 (credentials → OTP callback), print callback shape
+- [x] Subtask 2 — OTP capture from Gmail for aldar.com emails (probe-local regex first)
 - [ ] Subtask 3 — Phase 2: submit the OTP into the callback chain, obtain the session/token
 - [ ] Subtask 4 — Authenticated calls to `communityservice…/api/v1`: categories → classes → schedules/packages → availableSlots
 - [ ] Subtask 5 — Dump each response (status + JSON head) so the request shapes are confirmed; save tokens for reuse
 - [ ] Subtask 6 — Run end-to-end with the user's credentials, record findings
+
+**Progress (18-11-2026 00:35)**: probe written and pushed. **Phase 1 verified live**: chain start returns `NameCallback(IDToken1,"User Name") + PasswordCallback(IDToken2,"Password")` — matches the handler. The OTP callback type is still unknown (only revealed after real credentials are submitted); the handler guesses it via a generic "unknown callback → wants the 4-digit value" branch, logging its raw shape for follow-up. `py_compile` OK. Awaiting: user updates `config.json` with Aldar credentials, then run `python aldar_probe.py auth`.
 
 ### Full Context Notes for AI Agents
 

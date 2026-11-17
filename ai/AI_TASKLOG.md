@@ -72,8 +72,20 @@ Targeted probes (3 requests total, no sweeps):
 
 **Decision point / options for the user**:
 1. **Capture the mobile app's traffic** (the original question). Android emulator + proxy is the practical route: `app.apk` + mitmproxy/Burp, or a real Android with Wi-Fi proxy + user CA cert. iOS needs a jailbreak or an SSL-kill-switch device; a Mac + Proxyman works for non-pinned traffic. **Must first check whether the app pins certificates** — if it does, only Frida/objection on a rooted device will work.
-2. Ask Aldar/Reeman support whether amenity booking is coming back to the web.
-3. Keep the bot for *classes* only (fully mapped) and do padel manually.
+**Progress (18-11-2026 04:20) — MOBILE APP CONFIRMED, TOOLING READY, APK SOURCE PENDING**:
+Play Store (`google_play_scraper`): **Live Aldar**, `app.aldar.live`, **v7.8.8**, developer **Aldar Properties PJSC**, 10K+ installs, **updated 17-11-2026** (yesterday). The store description is now a lifestyle/rewards super-app (shop, dine, hotels, attractions, school fees, property mgmt) — **amenity booking is not mentioned at all**, consistent with it being buried/removed. No developer-provided APK link (only Website / +97180025327 / customercare@aldar.com).
+
+Tooling installed and verified on this machine:
+- `adb` + `aapt` — already present at `D:\android_tools\` (also `C:\RSL\platform-tools`, and a **Nox emulator** at `C:\Program Files\Nox\bin\`). No device/emulator currently attached (`adb devices` empty on both).
+- `frida 17.27.0`, `frida-tools`, `objection 1.12.5` — installed (needed only if the app pins certificates).
+- `google_play_scraper` (metadata), `playwright-cli` (web capture, already used successfully).
+
+**How to get the APK (pick one, then I take over):**
+1. **Real Android phone with USB debugging** → `adb pull $(adb shell pm path app.aldar.live | cut -d: -f2 | head -1) ai_out\aldar_live.apk` — official build, exact version you use. Best option.
+2. **Start the Nox emulator**, install Live Aldar inside it, then the same `adb pull`. (Nox is x86 → needs Houdini/ARM translation; may fail on ARM-only native libs.)
+3. Third-party APK mirror — possible but I'd rather not: unverifiable binary provenance.
+
+**Once we have the APK, my plan (no guessing):** `aapt dump badging` for the manifest → unzip and read `assets/index.android.bundle` (React Native) or `assets/*.js` to grep the *real* amenity endpoints; check `res/xml/network_security_config.xml` + native libs (`libsslpinning`, OkHttp certificate piner) to know if pinning blocks a plain proxy; then mitmproxy/Burp (or objection's `sslpinning disable`) to capture the live booking call.
 
 **Progress (18-11-2026 02:55) — ENDPOINTS PROVEN WITH A REAL BROWSER SESSION (playwright-cli)**:
 Installed the `microsoft/playwright-cli` skill (`npm i -g @playwright/cli`). Drove a headless Chromium through the real UI once: `/live/login` (email, password, **Remember Me checked**) → `/live/otp` (4-digit code captured from Gmail by `aldar_probe.capture_aldar_otp`) → logged in. Then saved storage state and recorded every XHR with `playwright-cli requests / request-body / response-body`.

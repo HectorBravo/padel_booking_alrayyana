@@ -14,8 +14,8 @@
 - **Status**: <span style="background-color:#0969da;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">in_progress</span>
 - **Type**: <span style="background-color:#22863a;color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;">feat</span>
 - **Created**: 18-11-2026 00:07:55
-- **Last Updated**: 18-11-2026 00:35:00
-- **Time Spent**: 27m
+- **Last Updated**: 18-11-2026 00:50:00
+- **Time Spent**: 42m
 - **Branch**: [`feat/ai-aldar-live-probe`](https://github.com/HectorBravo/padel_booking_alrayyana/tree/feat/ai-aldar-live-probe)
 - **Commit(s)**: [4254370](https://github.com/HectorBravo/padel_booking_alrayyana/commit/4254370) (log), [16c5bbc](https://github.com/HectorBravo/padel_booking_alrayyana/commit/16c5bbc) (probe script)
 - **Blockers**: none
@@ -23,7 +23,10 @@
   - The Asteco portal (`myportal.asteco.com`) is gone; the community moved to Aldar Live (`https://www.aldar.com/live`), a Next.js SPA whose whole API surface was extracted statically from its JS bundles (no iPhone traffic capture needed).
   - Auth = ForgeRock AM at `https://frald.aldar.com/am`, realm `alpha`, journey **`LIVE ALDAR WEB USER EMAIL LOGIN`**. Verified live: `POST /am/json/realms/root/realms/alpha/authenticate?authIndexType=service&authIndexValue=LIVE%20ALDAR%20WEB%20USER%20EMAIL%20LOGIN&flow=<same>` → HTTP 200 with `callbacks`: `NameCallback(IDToken1)` + `PasswordCallback(IDToken2)`.
   - OTP = **4 digits**, emailed by `no-reply@aldar.com` ("Use the following One-Time Password (OTP)… <code> … valid for the next 10 minutes"). The old Gmail capture in `google_otp.py` filters `from:asteco.com` + "is your ASTECO OTP" → must be re-pointed at aldar.com.
-  - Booking APIs on **`https://communityservice.live.aldar.com/api/v1/`** (verified live: real paths → 403 auth-gate; fake paths → 404): `classes/categories`, `bookings/classes`, `bookings/class/details`, `classes/schedules`, `classes/packages`, `classes/availableSlots`, **`classes/bookings` (create)**, `classes/getBookings` (history), `classes/initiate-payment`.
+  - Booking APIs are on **`https://requestservice.live.aldar.com/api/v1/`** (NOT communityservice; verified live with a real browser session): `classes/categories`, `classes/packages`, `classes/schedules`, `classes/availableSlots`, `classes/getBookings` (history), `classes/bookings` (create). The `bookings/classes` family from the static endpoint map is dead (404).
+  - **403 root cause was OAuth scope**: the SPA asks for `UAEPASS openid profile email`; our probe asked only `openid profile email` and got `Forbidden resource`. Fixed by requesting the UAEPASS scope.
+  - **The Padel Court is an "Amenity" booking (`bookingTypeVal: "Amenity"`), not a class** — `classes/*` returns empty for all categories. The amenity booking endpoints are still to be discovered (next step, via browser capture).
+  - Access token lives **180 days**; storage state saved at `ai_out/aldar_pw_state.json` (`FR-SDK-FRPROD.accessToken`) is enough to call the APIs without cookies.
   - Create-booking payload (decoded from the `booking/detail` chunk): `{classScheduleId, classId, packageId, packageType, numberOfParticipants, unitId, customerId, referenceId(PersonEmail), participants[{name,age,ParticipantId,bookingAmount,vatAmount}], totalBookingAmount, totalVatAmount}`.
   - User confirmation: web UI only shows booking *history* for them; the create flow exists in the SPA (detail page) but they couldn't reach it — hence the probe-first approach before rewriting the bot.
 
@@ -42,12 +45,38 @@
 
 - [x] Subtask 1 — `aldar_probe.py`: ForgeRock login phase 1 (credentials → OTP callback), print callback shape
 - [x] Subtask 2 — OTP capture from Gmail for aldar.com emails (probe-local regex first)
-- [ ] Subtask 3 — Phase 2: submit the OTP into the callback chain, obtain the session/token
-- [ ] Subtask 4 — Authenticated calls to `communityservice…/api/v1`: categories → classes → schedules/packages → availableSlots
-- [ ] Subtask 5 — Dump each response (status + JSON head) so the request shapes are confirmed; save tokens for reuse
-- [ ] Subtask 6 — Run end-to-end with the user's credentials, record findings
+- [x] Subtask 3 — Phase 2: submit the OTP into the callback chain, obtain the session/token (**DONE — full OAuth access + refresh token acquired**)
+- [x] Subtask 4 — Authenticated calls to the booking APIs (**DONE — `classes/getBookings` returns the real Padel Court booking; 403 root cause was the missing `UAEPASS` OAuth scope, see Findings**)
+- [x] Subtask 5 — Dump each response (status + JSON head) so the request shapes are confirmed; save tokens for reuse (**DONE via playwright-cli network capture: `ai_out/cap_*.json|txt`, storage state `ai_out/aldar_pw_state.json`**)
+- [ ] Subtask 6 — Decide how to reach the class/schedule list (the SPA shows "No classes available in this category" for Fitness/Wellness/Lifestyle, yet an Amenity booking exists → amenity bookings are not served by `classes/*`; needs its own endpoints)
 
-**Progress (18-11-2026 00:35)**: probe written and pushed. **Phase 1 verified live**: chain start returns `NameCallback(IDToken1,"User Name") + PasswordCallback(IDToken2,"Password")` — matches the handler. The OTP callback type is still unknown (only revealed after real credentials are submitted); the handler guesses it via a generic "unknown callback → wants the 4-digit value" branch, logging its raw shape for follow-up. `py_compile` OK. Awaiting: user updates `config.json` with Aldar credentials, then run `python aldar_probe.py auth`.
+- [ ] Subtask 7 — Apply the `UAEPASS` scope fix in `aldar_probe.py` and re-verify `classes/packages` returns 201 from our own auth (not just the browser token)
+- [ ] Subtask 8 — Discover the amenity booking endpoints (browser capture on the facility tiles), then design the padel booking flow
+
+**Progress (18-11-2026 02:55) — ENDPOINTS PROVEN WITH A REAL BROWSER SESSION (playwright-cli)**:
+Installed the `microsoft/playwright-cli` skill (`npm i -g @playwright/cli`). Drove a headless Chromium through the real UI once: `/live/login` (email, password, **Remember Me checked**) → `/live/otp` (4-digit code captured from Gmail by `aldar_probe.capture_aldar_otp`) → logged in. Then saved storage state and recorded every XHR with `playwright-cli requests / request-body / response-body`.
+
+1. **The 403 was a scope problem, not headers or body.** The browser's access token has `scope: ["UAEPASS","openid","profile","email"]`; the token our probe minted had only `["openid","profile","email"]`. With the browser token, `classes/packages` (which 403'd before) answers **201**. → Fix in `aldar_probe.py`: request scope `UAEPASS openid profile email` on `/authorize` and verify the claim in the returned JWT.
+2. **Booking APIs live on `requestservice.live.aldar.com/api/v1/`** (not `communityservice`). Confirmed routes: `classes/categories`, `classes/packages`, `classes/schedules`, `classes/availableSlots`, `classes/getBookings`, `classes/bookings` (create — never called). `bookings/classes`, `bookings/class/details`, `bookings/provider/classes` are **dead** (404 "Cannot POST").
+3. **Exact captured bodies** (`ai_out/cap_getbookings_body.txt`, `cap_packages_body.txt`):
+   - `classes/getBookings`: `{"customerId","referenceId","selectedUnits":[{unitId,buildingId,projectId}],"page":1,"status":"All","pageSize":6}`
+   - `classes/packages`: `{"customerId","unitId","referenceId","communityId","buildingId","categories":"Fitness"}` (note: `categories`, singular value; `communityId` = the *project* id)
+4. **Only headers that matter**: `Authorization: Bearer …`, `Content-Type: application/json`, `Origin/Referer`. The datadog/`traceparent`/`x-request-id` headers are RUM telemetry — replay without them works (verified 201).
+5. **The real booking record** (`ai_out/cap_booking_detail.json`) reveals the domain split: `"bookingTypeVal":"Amenity"`, `classType:null`, `packageType:null`, `ageGroup:null`, amounts `null`. So **the Padel Court is an AMENITY, not a "class"** — that's why `classes/packages` returns `[]` for every category and the UI says "No classes available in this category". The amenity booking flow has its own endpoints, still undiscovered.
+6. **Session lifetime**: access token `exp - iat = 15552000 s` (**180 days**), and with Remember Me the persisted state (`ai_out/aldar_pw_state.json`: `FR-SDK-FRPROD` + `persist:root` in localStorage) is enough to call the APIs directly — no cookies needed. Re-login is only needed every ~6 months.
+7. **Gotcha**: navigating straight to `/live/user/overview` after some flows lands on `/live/user/no-properties` (unit context lost). The unit ids must come from `config.json` / the captured constants, not from navigation state.
+
+**Next step for subtask 6**: find the *amenity* endpoints. Best route is the same one that worked here — drive the browser to the amenity booking screen (the "Bookings" landing page shows facility tiles: Swimming / Tennis / Basketball / Spa & Wellness / yoga) and capture what it calls when a facility is opened; `classes/schedules` + `classes/availableSlots` bodies will come with it.
+
+**Progress (18-11-2026 00:50) — AUTH FULLY WORKING**: `python aldar_probe.py auth` now completes end-to-end and writes `aldar_session.json` (`token` = OAuth access_token JWT, plus cookies; AM also returns a refresh_token). Root causes that were blocking the OTP step, all fixed in `aldar_probe.py`:
+1. **Wrong request headers.** The SPA's FRAuth Next SDK (chunk `1006`, module `41006`) sends `Accept-API-Version: protocol=1.0,resource=2.1` and `X-Requested-With: forgerock-sdk`. With `resource=2.0` AM replayed the journey from the start every round (infinite Name/Password loop).
+2. **Extra `flow=` query param** was wrong — the SPA sends only `authIndexType` + `authIndexValue`. Removed.
+3. **Payload handling.** The SPA keeps the *response envelope* and re-submits it unchanged, filling only `input[].value`. Merging/rebuilding callbacks produced 401 "Login failure". Rewritten as an `envelope` loop; `merge_callbacks()` kept only as a deprecated reference.
+4. **Stale OTP.** Aldar's OTP is single-use; the first captured email was often already consumed, so AM answered "OTP is invalid." → "OTP Limit Exceeded". Now every OTP round re-reads Gmail and skips codes already tried (`capture_aldar_otp(..., exclude=used_otp)`); query `subject:"One-Time Password" newer_than:20m`, filtered to subjects containing "Live Aldar" (Amazon delivery OTPs share that subject). Aldar's mail API omits `internalDate`, so time filtering is best-effort — ordering relies on Gmail's newest-first.
+5. **Success detection.** ForgeRock finishes with `{"tokenId":…,"realm":"/alpha","successUrl":…}` and **no** `callbacks`; the loop used to treat that as failure. Now breaks on `tokenId`.
+6. **OAuth leg.** After the tree succeeds, replaying `/authorize` (same session + PKCE verifier) returns `?code=…`, exchanged at `/oauth2/realms/root/realms/alpha/access_token` for access + refresh tokens. Scope `openid profile email UAEPASS` was tried and makes **no** difference to the API 403 below.
+
+**Current blocker (subtask 4): every booking endpoint answers `403 {"Forbidden resource"}`** even with a valid bearer token (FR `/userinfo` returns 200 with the user's property/darna authorizations). Verified: authenticated `POST` → 403, unauthenticated `POST` → also 403, `GET` → 404. So the endpoint exists and the gate is not our token alone.
 
 ### Full Context Notes for AI Agents
 

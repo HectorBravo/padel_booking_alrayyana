@@ -57,20 +57,20 @@ python -m pip uninstall -y frida frida-tools objection google-play-api-unofficia
 python -m pip uninstall -y configobj delegator-py litecli pexpect ptyprocess sqlparse tabulate websockets
 ```
 
-## 3. npm global — `@playwright/cli` 0.1.24
+## 3. npm global — `@playwright/cli` 0.1.24  ✅ **KEEP (user wants it)**
 
 Installed globally for the web capture (used to log in and record network traffic).
+**User decision: this one stays after the task.** Do NOT uninstall it.
 
-**Remove:**
-```powershell
-npm uninstall -g @playwright/cli
-```
 No browser binaries were downloaded into `%LOCALAPPDATA%\ms-playwright` (only empty
 `b\` / `daemon\` folders, 0 MB) — it used the system Chrome channel.
 
-## 4. Skills (agent-level, not on this machine's runtime)
+If ever needed: `npm uninstall -g @playwright/cli`.
+
+## 4. Skills (agent-level, not on this machine's runtime)  ✅ **KEEP**
 
 Installed via the skills CLI: `microsoft/playwright-cli` → skill `playwright-cli`.
+Stays too — it pairs with the kept npm package above.
 
 **Remove:** delete its entry from `%USERPROFILE%\.agents\skills\` and
 `%USERPROFILE%\.agents\.skill-lock.json` (or `npx skills remove playwright-cli`).
@@ -97,3 +97,11 @@ Remove-Item -LiteralPath 'aldar_session.json' -Force
 - `D:\tools\jdk-17.0.2` — pre-existing JDK we reused.
 - No Windows features enabled; no services added; no registry changes; no global
   environment variables modified.
+
+## Summary of what actually needs removing at the end
+
+| Keep | Remove |
+|---|---|
+| `@playwright/cli` (npm) + `playwright-cli` skill | `D:\android_sdk` (~4.5 GB) + `~\.android` |
+| | pip: frida, frida-tools, objection, google-play-api-unofficial (+deps if new) |
+| | repo: `ai_out\`, `.playwright-cli\`, `aldar_session.json` (contains live token) |
